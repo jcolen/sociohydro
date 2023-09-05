@@ -1,0 +1,111 @@
+  jupyter lab --no-browser --ip=${HOST_IP} --port 8100 
+[I 2023-09-05 15:29:31.857 ServerApp] jupyterlab | extension was successfully linked.
+[I 2023-09-05 15:29:32.130 ServerApp] jupyterlab_hdf | extension was found and enabled by nbclassic. Consider moving the extension to Jupyter Server's extension paths.
+[I 2023-09-05 15:29:32.130 ServerApp] jupyterlab_hdf | extension was successfully linked.
+[I 2023-09-05 15:29:32.148 ServerApp] nbresuse | extension was found and enabled by nbclassic. Consider moving the extension to Jupyter Server's extension paths.
+[I 2023-09-05 15:29:32.149 ServerApp] nbresuse | extension was successfully linked.
+[I 2023-09-05 15:29:32.149 ServerApp] nbclassic | extension was successfully linked.
+[I 2023-09-05 15:29:32.162 LabApp] JupyterLab extension loaded from /project/vitelli/ml_venv/lib/python3.7/site-packages/jupyterlab
+[I 2023-09-05 15:29:32.162 LabApp] JupyterLab application directory is /project/vitelli/ml_venv/share/jupyter/lab
+[I 2023-09-05 15:29:32.165 ServerApp] jupyterlab | extension was successfully loaded.
+[I 2023-09-05 15:29:32.165 ServerApp] jupyterlab_hdf | extension was successfully loaded.
+[I 2023-09-05 15:29:32.168 ServerApp] nbclassic | extension was successfully loaded.
+[I 2023-09-05 15:29:32.169 ServerApp] nbresuse | extension was successfully loaded.
+[I 2023-09-05 15:29:32.169 ServerApp] Serving notebooks from local directory: /home/jcolen/sociohydro
+[I 2023-09-05 15:29:32.169 ServerApp] Jupyter Server 1.6.4 is running at:
+[I 2023-09-05 15:29:32.169 ServerApp] http://10.50.251.51:8100/lab?token=...
+[I 2023-09-05 15:29:32.169 ServerApp]     http://127.0.0.1:8100/lab?token=...
+[I 2023-09-05 15:29:32.169 ServerApp] Use Control-C to stop this server and shut down all kernels (twice to skip confirmation).
+[I 2023-09-05 15:29:38.119 ServerApp] 302 GET / (10.50.248.66) 0.41ms
+[I 2023-09-05 15:29:42.414 LabApp] Build is up to date
+[W 2023-09-05 15:29:42.459 ServerApp] 404 GET /api/contents/physical_bottleneck.ipynb?content=0&1693945782356 (10.50.248.66): No such file or directory: physical_bottleneck.ipynb
+[W 2023-09-05 15:29:42.459 ServerApp] No such file or directory: physical_bottleneck.ipynb
+[W 2023-09-05 15:29:42.459 ServerApp] 404 GET /api/contents/physical_bottleneck.ipynb?content=0&1693945782356 (10.50.248.66) 1.20ms referer=http://localhost:8100/lab?
+[W 2023-09-05 15:29:42.462 ServerApp] 404 GET /api/contents/train_PBNN.py?content=0&1693945782357 (10.50.248.66): No such file or directory: train_PBNN.py
+[W 2023-09-05 15:29:42.462 ServerApp] No such file or directory: train_PBNN.py
+[W 2023-09-05 15:29:42.462 ServerApp] 404 GET /api/contents/train_PBNN.py?content=0&1693945782357 (10.50.248.66) 2.49ms referer=http://localhost:8100/lab?
+[W 2023-09-05 15:29:42.462 ServerApp] 404 GET /api/contents/train_stationary.slurm?content=0&1693945782357 (10.50.248.66): No such file or directory: train_stationary.slurm
+[W 2023-09-05 15:29:42.462 ServerApp] No such file or directory: train_stationary.slurm
+[W 2023-09-05 15:29:42.462 ServerApp] 404 GET /api/contents/train_stationary.slurm?content=0&1693945782357 (10.50.248.66) 2.66ms referer=http://localhost:8100/lab?
+[W 2023-09-05 15:29:42.463 ServerApp] 404 GET /api/contents/pbnn.py?content=0&1693945782357 (10.50.248.66): No such file or directory: pbnn.py
+[W 2023-09-05 15:29:42.463 ServerApp] No such file or directory: pbnn.py
+[W 2023-09-05 15:29:42.463 ServerApp] 404 GET /api/contents/pbnn.py?content=0&1693945782357 (10.50.248.66) 3.13ms referer=http://localhost:8100/lab?
+[E 2023-09-05 15:29:42.464 ServerApp] The request specified a file that does not exist.
+    relfpath: sociohydro/data/cook_IL.hdf5, uri: /, min_ndim: None, ixstr: None, subixstr: None, attr_keys: None
+[W 2023-09-05 15:29:42.464 ServerApp] 403 GET /hdf/contents/sociohydro/data/cook_IL.hdf5?uri=%2F&1693945782356 (10.50.248.66) 3.63ms referer=http://localhost:8100/lab?
+[W 2023-09-05 15:29:42.507 ServerApp] 404 GET /terminals/websocket/1 (10.50.248.66) 11.92ms referer=None
+[W 2023-09-05 15:29:42.508 ServerApp] 404 GET /api/contents/train_dynamic.slurm?content=0&1693945782358 (10.50.248.66): No such file or directory: train_dynamic.slurm
+[W 2023-09-05 15:29:42.509 ServerApp] No such file or directory: train_dynamic.slurm
+[W 2023-09-05 15:29:42.509 ServerApp] 404 GET /api/contents/train_dynamic.slurm?content=0&1693945782358 (10.50.248.66) 0.86ms referer=http://localhost:8100/lab?
+[E 2023-09-05 15:29:42.635 ServerApp] The request specified a file that does not exist.
+    relfpath: sociohydro/data/cook_IL.hdf5, uri: /, min_ndim: None, ixstr: None, subixstr: None, attr_keys: None
+[W 2023-09-05 15:29:42.636 ServerApp] 403 GET /hdf/contents/sociohydro/data/cook_IL.hdf5?uri=%2F&1693945782534 (10.50.248.66) 0.87ms referer=http://localhost:8100/lab?
+[E 2023-09-05 15:29:46.228 ServerApp] The request specified a file that does not exist.
+    relfpath: sociohydro/data/cook_IL.hdf5, uri: /, min_ndim: None, ixstr: None, subixstr: None, attr_keys: None
+[W 2023-09-05 15:29:46.229 ServerApp] 403 GET /hdf/contents/sociohydro/data/cook_IL.hdf5?uri=%2F&1693945786128 (10.50.248.66) 1.15ms referer=http://localhost:8100/lab?
+[E 2023-09-05 15:29:51.270 ServerApp] The request specified a file that does not exist.
+    relfpath: sociohydro/data/cook_IL.hdf5, uri: /, min_ndim: None, ixstr: None, subixstr: None, attr_keys: None
+[W 2023-09-05 15:29:51.270 ServerApp] 403 GET /hdf/contents/sociohydro/data/cook_IL.hdf5?uri=%2F&1693945791170 (10.50.248.66) 1.13ms referer=http://localhost:8100/lab?
+[E 2023-09-05 15:29:56.311 ServerApp] The request specified a file that does not exist.
+    relfpath: sociohydro/data/cook_IL.hdf5, uri: /, min_ndim: None, ixstr: None, subixstr: None, attr_keys: None
+[W 2023-09-05 15:29:56.312 ServerApp] 403 GET /hdf/contents/sociohydro/data/cook_IL.hdf5?uri=%2F&1693945796212 (10.50.248.66) 1.14ms referer=http://localhost:8100/lab?
+[E 2023-09-05 15:30:01.359 ServerApp] The request specified a file that does not exist.
+    relfpath: sociohydro/data/cook_IL.hdf5, uri: /, min_ndim: None, ixstr: None, subixstr: None, attr_keys: None
+[W 2023-09-05 15:30:01.359 ServerApp] 403 GET /hdf/contents/sociohydro/data/cook_IL.hdf5?uri=%2F&1693945801257 (10.50.248.66) 2.11ms referer=http://localhost:8100/lab?
+[E 2023-09-05 15:30:06.410 ServerApp] The request specified a file that does not exist.
+    relfpath: sociohydro/data/cook_IL.hdf5, uri: /, min_ndim: None, ixstr: None, subixstr: None, attr_keys: None
+[W 2023-09-05 15:30:06.410 ServerApp] 403 GET /hdf/contents/sociohydro/data/cook_IL.hdf5?uri=%2F&1693945806309 (10.50.248.66) 1.11ms referer=http://localhost:8100/lab?
+[E 2023-09-05 15:30:11.460 ServerApp] The request specified a file that does not exist.
+    relfpath: sociohydro/data/cook_IL.hdf5, uri: /, min_ndim: None, ixstr: None, subixstr: None, attr_keys: None
+[W 2023-09-05 15:30:11.460 ServerApp] 403 GET /hdf/contents/sociohydro/data/cook_IL.hdf5?uri=%2F&1693945811353 (10.50.248.66) 3.32ms referer=http://localhost:8100/lab?
+[E 2023-09-05 15:30:16.504 ServerApp] The request specified a file that does not exist.
+    relfpath: sociohydro/data/cook_IL.hdf5, uri: /, min_ndim: None, ixstr: None, subixstr: None, attr_keys: None
+[W 2023-09-05 15:30:16.504 ServerApp] 403 GET /hdf/contents/sociohydro/data/cook_IL.hdf5?uri=%2F&1693945816402 (10.50.248.66) 3.02ms referer=http://localhost:8100/lab?
+[E 2023-09-05 15:30:21.554 ServerApp] The request specified a file that does not exist.
+    relfpath: sociohydro/data/cook_IL.hdf5, uri: /, min_ndim: None, ixstr: None, subixstr: None, attr_keys: None
+[W 2023-09-05 15:30:21.554 ServerApp] 403 GET /hdf/contents/sociohydro/data/cook_IL.hdf5?uri=%2F&1693945821446 (10.50.248.66) 1.12ms referer=http://localhost:8100/lab?
+[E 2023-09-05 15:30:26.593 ServerApp] The request specified a file that does not exist.
+    relfpath: sociohydro/data/cook_IL.hdf5, uri: /, min_ndim: None, ixstr: None, subixstr: None, attr_keys: None
+[W 2023-09-05 15:30:26.594 ServerApp] 403 GET /hdf/contents/sociohydro/data/cook_IL.hdf5?uri=%2F&1693945826492 (10.50.248.66) 1.11ms referer=http://localhost:8100/lab?
+[E 2023-09-05 15:30:31.642 ServerApp] The request specified a file that does not exist.
+    relfpath: sociohydro/data/cook_IL.hdf5, uri: /, min_ndim: None, ixstr: None, subixstr: None, attr_keys: None
+[W 2023-09-05 15:30:31.643 ServerApp] 403 GET /hdf/contents/sociohydro/data/cook_IL.hdf5?uri=%2F&1693945831535 (10.50.248.66) 2.10ms referer=http://localhost:8100/lab?
+[E 2023-09-05 15:30:36.689 ServerApp] The request specified a file that does not exist.
+    relfpath: sociohydro/data/cook_IL.hdf5, uri: /, min_ndim: None, ixstr: None, subixstr: None, attr_keys: None
+[W 2023-09-05 15:30:36.689 ServerApp] 403 GET /hdf/contents/sociohydro/data/cook_IL.hdf5?uri=%2F&1693945836585 (10.50.248.66) 1.14ms referer=http://localhost:8100/lab?
+[E 2023-09-05 15:30:41.741 ServerApp] The request specified a file that does not exist.
+    relfpath: sociohydro/data/cook_IL.hdf5, uri: /, min_ndim: None, ixstr: None, subixstr: None, attr_keys: None
+[W 2023-09-05 15:30:41.741 ServerApp] 403 GET /hdf/contents/sociohydro/data/cook_IL.hdf5?uri=%2F&1693945841631 (10.50.248.66) 1.10ms referer=http://localhost:8100/lab/tree/pinn
+[I 2023-09-05 15:30:44.027 ServerApp] Kernel started: ae53a258-948e-449f-bc68-640c37b8d64f
+[IPKernelApp] ERROR | UNKNOWN CONTROL MESSAGE TYPE: 'debug_request'
+[E 2023-09-05 15:30:46.783 ServerApp] The request specified a file that does not exist.
+    relfpath: sociohydro/data/cook_IL.hdf5, uri: /, min_ndim: None, ixstr: None, subixstr: None, attr_keys: None
+[W 2023-09-05 15:30:46.784 ServerApp] 403 GET /hdf/contents/sociohydro/data/cook_IL.hdf5?uri=%2F&1693945846682 (10.50.248.66) 1.24ms referer=http://localhost:8100/lab/tree/pinn/PINN.ipynb
+[E 2023-09-05 15:30:51.839 ServerApp] The request specified a file that does not exist.
+    relfpath: sociohydro/data/cook_IL.hdf5, uri: /, min_ndim: None, ixstr: None, subixstr: None, attr_keys: None
+[W 2023-09-05 15:30:51.839 ServerApp] 403 GET /hdf/contents/sociohydro/data/cook_IL.hdf5?uri=%2F&1693945851732 (10.50.248.66) 1.11ms referer=http://localhost:8100/lab/tree/pinn/PINN.ipynb
+[E 2023-09-05 15:30:56.885 ServerApp] The request specified a file that does not exist.
+    relfpath: sociohydro/data/cook_IL.hdf5, uri: /, min_ndim: None, ixstr: None, subixstr: None, attr_keys: None
+[W 2023-09-05 15:30:56.886 ServerApp] 403 GET /hdf/contents/sociohydro/data/cook_IL.hdf5?uri=%2F&1693945856779 (10.50.248.66) 1.98ms referer=http://localhost:8100/lab/tree/pinn/PINN.ipynb
+[E 2023-09-05 15:31:01.935 ServerApp] The request specified a file that does not exist.
+    relfpath: sociohydro/data/cook_IL.hdf5, uri: /, min_ndim: None, ixstr: None, subixstr: None, attr_keys: None
+[W 2023-09-05 15:31:01.936 ServerApp] 403 GET /hdf/contents/sociohydro/data/cook_IL.hdf5?uri=%2F&1693945861823 (10.50.248.66) 1.12ms referer=http://localhost:8100/lab/tree/pinn/PINN.ipynb
+[E 2023-09-05 15:31:06.981 ServerApp] The request specified a file that does not exist.
+    relfpath: sociohydro/data/cook_IL.hdf5, uri: /, min_ndim: None, ixstr: None, subixstr: None, attr_keys: None
+[W 2023-09-05 15:31:06.981 ServerApp] 403 GET /hdf/contents/sociohydro/data/cook_IL.hdf5?uri=%2F&1693945866876 (10.50.248.66) 1.14ms referer=http://localhost:8100/lab/tree/pinn/PINN.ipynb
+[I 2023-09-05 15:31:11.243 ServerApp] Saving file at /pinn/PINN.ipynb
+[E 2023-09-05 15:31:12.038 ServerApp] The request specified a file that does not exist.
+    relfpath: sociohydro/data/cook_IL.hdf5, uri: /, min_ndim: None, ixstr: None, subixstr: None, attr_keys: None
+[W 2023-09-05 15:31:12.038 ServerApp] 403 GET /hdf/contents/sociohydro/data/cook_IL.hdf5?uri=%2F&1693945871925 (10.50.248.66) 1.06ms referer=http://localhost:8100/lab/tree/pinn/PINN.ipynb
+[E 2023-09-05 15:31:17.089 ServerApp] The request specified a file that does not exist.
+    relfpath: sociohydro/data/cook_IL.hdf5, uri: /, min_ndim: None, ixstr: None, subixstr: None, attr_keys: None
+[W 2023-09-05 15:31:17.090 ServerApp] 403 GET /hdf/contents/sociohydro/data/cook_IL.hdf5?uri=%2F&1693945876981 (10.50.248.66) 1.10ms referer=http://localhost:8100/lab/tree/pinn/PINN.ipynb
+[E 2023-09-05 15:31:22.138 ServerApp] The request specified a file that does not exist.
+    relfpath: sociohydro/data/cook_IL.hdf5, uri: /, min_ndim: None, ixstr: None, subixstr: None, attr_keys: None
+[W 2023-09-05 15:31:22.139 ServerApp] 403 GET /hdf/contents/sociohydro/data/cook_IL.hdf5?uri=%2F&1693945882026 (10.50.248.66) 1.09ms referer=http://localhost:8100/lab/tree/pinn/PINN.ipynb
+[E 2023-09-05 15:31:27.181 ServerApp] The request specified a file that does not exist.
+    relfpath: sociohydro/data/cook_IL.hdf5, uri: /, min_ndim: None, ixstr: None, subixstr: None, attr_keys: None
+[W 2023-09-05 15:31:27.181 ServerApp] 403 GET /hdf/contents/sociohydro/data/cook_IL.hdf5?uri=%2F&1693945887075 (10.50.248.66) 1.12ms referer=http://localhost:8100/lab/tree/pinn/pinn.py
+[E 2023-09-05 15:31:32.225 ServerApp] The request specified a file that does not exist.
+    relfpath: sociohydro/data/cook_IL.hdf5, uri: /, min_ndim: None, ixstr: None, subixstr: None, attr_keys: None
+[W 2023-09-05 15:31:32.226 ServerApp] 403 GET /hdf/contents/sociohydro/data/cook_IL.hdf5?uri=%2F&1693945892121 (10.50.248.66) 1.12ms referer=http://localhost:8100/lab/tree/pinn/pinn.py
