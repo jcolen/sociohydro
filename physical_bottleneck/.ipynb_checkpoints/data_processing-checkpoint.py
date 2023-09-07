@@ -23,6 +23,15 @@ def smooth_with_fill(arr, sigma=3):
     arr[msk] = np.nan
     return arr
 
+def mesh_to_scalar_img(f, mesh, x, y, mask):
+    f_verts = f.compute_vertex_values()
+    x_verts = mesh.coordinates()[:, 0]
+    y_verts = mesh.coordinates()[:, 1]
+    
+    f_img = griddata((x_verts, y_verts), f_verts, (x, y))
+    f_img[~mask] = 0
+    return f_img
+
 def scalar_img_to_mesh(img, x, y, FctSpace, vals_only=False):
     '''
     from github.com/schmittms/physical_bottleneck
@@ -47,7 +56,11 @@ def scalar_img_to_mesh(img, x, y, FctSpace, vals_only=False):
         return fct_vals
     else:
         meshfct = d_ad.Function(FctSpace)
-        meshfct.vector()[:] = fct_vals
+
+        if not isinstance(img, np.ndarray):
+            meshfct.vector()[:] = fct_vals.detach().cpu().numpy()
+        else:
+            meshfct.vector()[:] = fct_vals
         return meshfct
 
 class CensusDataset(torch.utils.data.Dataset):

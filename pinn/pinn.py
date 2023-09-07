@@ -4,8 +4,13 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.autograd as autograd
 
-from convnext_models import Sin
-
+'''
+Building blocks
+'''
+class Sin(nn.Module):
+    def forward(self, x):
+        return torch.sin(x)
+    
 def init_weights(m):
     '''
     Initialization of weights in linear layers using xavier uniform
@@ -62,11 +67,7 @@ class PINN(nn.Module):
         self.gammas = nn.Parameter(torch.zeros(2, dtype=torch.float), requires_grad=True)
         self.model.register_parameter('gammas', self.gammas)
         
-        self.coefs  = nn.Parameter(torch.zeros(4, 6, dtype=torch.float), requires_grad=True)
-        self.model.register_parameter('coefs', self.coefs)
-        
         self.apply(init_weights)
-
     
     def setup_optimizers(self):
         self.lbfgs = torch.optim.LBFGS(
@@ -101,7 +102,7 @@ class PINN(nn.Module):
                  save_every=5000):
         super().__init__()
         self.n_inputs = 3
-        self.n_outputs = 2
+        self.n_outputs = 6 #[W, B, 4 Dij components]
         self.N_h = N_h
         self.N_l = N_l
         self.act = act
@@ -138,7 +139,7 @@ class PINN(nn.Module):
         outstr += self.equation_string()
         print(outstr, flush=True)
         
-    def train(self, n_lbfgs=3, n_adam=0):        
+    def train(self, n_lbfgs=0, n_adam=500000):        
         if n_lbfgs > 0:
             self.optimizer = self.lbfgs
             self.scheduler = self.lbfgs_scheduler
@@ -171,7 +172,7 @@ class PINN(nn.Module):
                 mse=mse,
                 phys=phys,
                 iteration=self.iter),
-           f'data/{self.__class__.__name__}')
+           f'./{self.__class__.__name__}')
 
     def forward(self, X):
         H = 2. * (X - self.lb) / (self.ub - self.lb) - 1.0
@@ -205,288 +206,21 @@ class PINN(nn.Module):
                 
         return mse, phys
     
-    def phys_loss(self, wb):
-        raise NotImplementedError
-        
-    def equation_string(self):
-        raise NotImplementedError
-    
-class UninformedPINN(PINN):
-    def phys_loss(self, wb):
-        return torch.zeros_like(wb).sum()
-        
-    def equation_string(self):
-        return ''
-    
-def linear_diffusion(wb, y, x, cij):
-    '''
-    Only include a constant diffusion matrix
-    '''
-    grad_wb = gradient(wb, y, x)
-    lapl_wb = div(grad_wb, y, x)
-
-    Dij = cij[:, 0]
-
-    D_w = torch.einsum('i,bi->b', Dij[0:2], lapl_wb)
-    D_b = torch.einsum('i,bi->b', Dij[2:4], lapl_wb)
-    
-    return torch.stack([D_w, D_b], dim=1)
-
-def quadratic_diffusion(wb, y, x, cij):
-    '''
-    Include the linear diffusion matrix entries (so quadratic diffusion)
-    cij = [4, 6]
-    '''
-    grad_wb = gradient(wb, y, x) #[N, 2, 2]
-    lapl_wb = div(grad_wb, y, x) #[N, 2]
-
-
-    Dij  = (cij[:, None, 1:3] * wb).sum(-1) #[4, N, 2] -> [4, N]
-    Dij += cij[:, 0:1] #[4, N]
-
-    grad_Dij  = (cij[:, None, 1:3, None] * grad_wb).sum(-2) #[4, N, 2, 2] -> [4, N, 2]
-    grad_Dij += 2 * (cij[:, None, 3:5, None] * wb[..., None] * grad_wb).sum(-2)
-
-    D_w = torch.einsum('jb,bj->b', Dij[0:2], lapl_wb) + \
-          torch.einsum('ibj,bij->b', grad_Dij[0:2], grad_wb)
-    D_b = torch.einsum('jb,bj->b', Dij[2:4], lapl_wb) + \
-          torch.einsum('ibj,bij->b', grad_Dij[2:4], grad_wb)
-    
-    return torch.stack([D_w, D_b], dim=1)
-
-def cubic_diffusion(wb, y, x, cij):
-    '''
-    Include the full quadratic diffusion matrix (so cubic diffusion)
-    cij = [4, 6]
-    '''
-    grad_wb = gradient(wb, y, x) #[N, 2, 2]
-    lapl_wb = div(grad_wb, y, x) #[N, 2]
-
-
-    Dij  = (cij[:, None, 1:3] * wb).sum(-1) #[4, N, 2] -> [4, N]
-    Dij += (cij[:, None, 3:5] * wb.pow(2)).sum(-1) #[4, N, 2] -> [4, N]
-    Dij += cij[:, 5:6] * wb[:, 0] * wb[:, 1] #[4, N]
-    Dij += cij[:, 0:1] #[4, N]
-
-    grad_Dij  = (cij[:, None, 1:3, None] * grad_wb).sum(-2) #[4, N, 2, 2] -> [4, N, 2]
-    grad_Dij += 2 * (cij[:, None, 3:5, None] * wb[..., None] * grad_wb).sum(-2)
-    grad_Dij += cij[:, 5:6, None] * (wb[:, 0:1] * grad_wb[:, 1] + wb[:, 1:2] * grad_wb[:, 0]) #[4, N, 2]
-
-    D_w = torch.einsum('jb,bj->b', Dij[0:2], lapl_wb) + \
-          torch.einsum('ibj,bij->b', grad_Dij[0:2], grad_wb)
-    D_b = torch.einsum('jb,bj->b', Dij[2:4], lapl_wb) + \
-          torch.einsum('ibj,bij->b', grad_Dij[2:4], grad_wb)
-    
-    return torch.stack([D_w, D_b], dim=1)
-
-def linear_gamma(wb, y, x, gamma):
-    '''
-    Use only the linear gamma term Gamma_i \nabla^4 \phi_i
-    gamma = [2]
-    '''
-    grad_wb = gradient(wb, y, x) #[N, 2, 2]
-    lapl_wb = div(grad_wb, y, x) #[N, 2]
-    d3_wb = gradient(lapl_wb, y, x) #[N, 2, 2]
-    bihr_wb = div(d3_wb, y, x) #[N, 2]
-    
-    G_wb = bihr_wb
-    
-    return gamma[None] * G_wb
-
-def nonlinear_gamma(wb, y, x, gamma):
-    '''
-    Use the full gamma term Gamma_i \nabla \cdot [(1 - \sum_j \phi_j) \phi_i \nabla^3 \phi_i]
-    
-    gamma = [2]
-    '''
-    grad_wb = gradient(wb, y, x) #[N, 2, 2]
-    lapl_wb = div(grad_wb, y, x) #[N, 2]
-    d3_wb = gradient(lapl_wb, y, x) #[N, 2, 2]
-    bihr_wb = div(d3_wb, y, x) #[N, 2]
-    
-    pref = 1 - torch.sum(wb, dim=1, keepdims=True) #[N, 1]
-    grad_pref = -torch.sum(grad_wb, dim=1, keepdims=True) #[N, 1, 2]
-    
-    G_wb  = pref * wb * bihr_wb #[N, 2]
-    G_wb += pref * torch.einsum('bij,bij->bi', grad_wb, d3_wb) #[N, 2]
-    G_wb += torch.einsum('bkj,bi,bij->bki', grad_pref, wb, d3_wb)[:, 0] #[N, 2]
-    
-    return gamma[None] * G_wb
-
-class DiffusionPINN(PINN):
-    '''
-    Only include diffusion processes
-    '''
-    def phys_loss(self, wb):
+    def phys_loss(self, wbD):
         t, y, x = self.t_u, self.y_u, self.x_u
         
-        dt_wb = gradient(wb, t)[..., 0]
-        D_wb = self.diffusion(wb, y, x, self.coefs)
-    
-        f_wb = dt_wb - D_wb
+        dt_wb = gradient(wbD[:, 0:2], t)[..., 0] #[N, 2]
+        D_wb = self.diffusion(wbD, y, x) #[N, 2]
+        G_wb = self.gamma_term(wbD[:, 0:2], y, x)
         
-        return f_wb.pow(2).mean(dim=0).sum()
-    
-    def equation_string(self):
-        coefs = self.coefs.detach().cpu().numpy()
-        eq = '\n'
-        eq +=  f'  dt P_w = div( D_wi grad(P_i))\n'
-        eq += '\tD_ww =  ' + ' + '.join([f'{c:.3g} {f}' for c, f in zip(coefs[0], self.facs)]) + '\n'
-        eq += '\tD_wb =  ' + ' + '.join([f'{c:.3g} {f}' for c, f in zip(coefs[1], self.facs)]) + '\n'
-        
-        eq += f'  dt P_b = div( D_bi grad(P_i))\n'
-        eq += '\tD_bw =  ' + ' + '.join([f'{c:.3g} {f}' for c, f in zip(coefs[2], self.facs)]) + '\n'
-        eq += '\tD_bb =  ' + ' + '.join([f'{c:.3g} {f}' for c, f in zip(coefs[3], self.facs)]) + '\n'
-            
-        return eq
-    
-class LinearDiffusionPINN(DiffusionPINN):
-    '''
-    Only include a constant diffusion matrix
-    '''
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.diffusion = linear_diffusion
-        self.facs = ['']
-
-class QuadraticDiffusionPINN(DiffusionPINN):
-    '''
-    Include the full quadratic diffusion term (so cubic diffusion)
-    '''
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.diffusion = quadratic_diffusion
-        self.facs = ['', 'P_w', 'P_b']
-    
-class CubicDiffusionPINN(DiffusionPINN):
-    '''
-    Include the full quadratic diffusion term (so cubic diffusion)
-    '''
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.diffusion = cubic_diffusion
-        self.facs = ['', 'P_w', 'P_b', 'P_w^2', 'P_b^2', 'P_w P_b']
-        
-class DiffusionLinearPINN(DiffusionPINN):
-    '''
-    Only include a linear Gamma term
-    '''
-    def phys_loss(self, wb):
-        t, y, x = self.t_u, self.y_u, self.x_u
-        
-        dt_wb = gradient(wb, t)[..., 0]
-        D_wb = self.diffusion(wb, y, x, self.coefs)
-        G_wb = linear_gamma(wb, y, x, self.gammas)
-    
         f_wb = dt_wb - D_wb + G_wb
         
         return f_wb.pow(2).mean(dim=0).sum()
-        
-    def equation_string(self):
-        coefs = self.coefs.detach().cpu().numpy()
-        gammas = self.gammas.detach().cpu().numpy()
-
-        eq = '\n'
-        eq +=  f'  dt P_w = div( D_wi grad(P_i)) - {gammas[0]:.3g} grad^4 P_w\n'
-        eq += '\tD_ww =  ' + ' + '.join([f'{c:.3g} {f}' for c, f in zip(coefs[0], self.facs)]) + '\n'
-        eq += '\tD_wb =  ' + ' + '.join([f'{c:.3g} {f}' for c, f in zip(coefs[1], self.facs)]) + '\n'
-        
-        eq +=  f'  dt P_b = div( D_bi grad(P_i)) - {gammas[1]:.3g} grad^4 P_b\n'
-        eq += '\tD_bw =  ' + ' + '.join([f'{c:.3g} {f}' for c, f in zip(coefs[2], self.facs)]) + '\n'
-        eq += '\tD_bb =  ' + ' + '.join([f'{c:.3g} {f}' for c, f in zip(coefs[3], self.facs)]) + '\n'
-            
-        return eq
-    
-class LinearDiffusionLinearPINN(DiffusionLinearPINN):
-    '''
-    Only include a constant diffusion matrix
-    '''
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.diffusion = linear_diffusion
-        self.facs = ['']
-
-class QuadraticDiffusionLinearPINN(DiffusionLinearPINN):
-    '''
-    Include the full quadratic diffusion term (so cubic diffusion)
-    '''
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.diffusion = quadratic_diffusion
-        self.facs = ['', 'P_w', 'P_b']
-    
-class CubicDiffusionLinearPINN(DiffusionLinearPINN):
-    '''
-    Include the full quadratic diffusion term (so cubic diffusion)
-    '''
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.diffusion = cubic_diffusion
-        self.facs = ['', 'P_w', 'P_b', 'P_w^2', 'P_b^2', 'P_w P_b']
-            
-    
-class SociohydrodynamicsPINN(DiffusionPINN):
-    '''
-    Include full dynamics
-    '''
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.diffusion = cubic_diffusion
-        self.facs = ['', 'P_w', 'P_b', 'P_w^2', 'P_b^2', 'P_w P_b']
-        
-    def phys_loss(self, wb):
-        t, y, x = self.t_u, self.y_u, self.x_u
-        
-        dt_wb = gradient(wb, t)[..., 0]
-        D_wb = self.diffusion(wb, y, x, self.coefs)
-        G_wb = nonlinear_gamma(wb, y, x, self.gammas)
-    
-        f_wb = dt_wb - D_wb + G_wb
-        
-        return f_wb.pow(2).mean(dim=0).sum()
-        
-    def equation_string(self):
-        coefs = self.coefs.detach().cpu().numpy()
-        gammas = self.gammas.detach().cpu().numpy()
-
-        eq = '\n'
-        eq +=  f'  dt P_w = div( D_wi grad(P_i) - {gammas[0]:.3g} (1 - P) P_w grad^3 P_w )\n'
-        eq += '\tD_ww =  ' + ' + '.join([f'{c:.3g} {f}' for c, f in zip(coefs[0], self.facs)]) + '\n'
-        eq += '\tD_wb =  ' + ' + '.join([f'{c:.3g} {f}' for c, f in zip(coefs[1], self.facs)]) + '\n'
-        
-        eq +=  f'  dt P_b = div( D_bi grad(P_i) - {gammas[1]:.3g} (1 - P) P_b grad^3 P_b )\n'
-        eq += '\tD_bw =  ' + ' + '.join([f'{c:.3g} {f}' for c, f in zip(coefs[2], self.facs)]) + '\n'
-        eq += '\tD_bb =  ' + ' + '.join([f'{c:.3g} {f}' for c, f in zip(coefs[3], self.facs)]) + '\n'
-            
-        return eq
-    
-class DiffusionNN_PINN(PINN):
-    '''
-    Model local diffusion matrix with a NN
-    '''
-    def setup_model(self):
-        
-        layers = [self.n_inputs,] + [self.N_h,]*self.N_l + [self.n_outputs+4,]
-        print(layers)
-        lst = []
-        for i in range(len(layers)-2):
-            lst.append(nn.Linear(layers[i], layers[i+1]))
-            lst.append(self.act())
-        lst.append(nn.Linear(layers[-2], layers[-1]))
-        self.model = nn.Sequential(*lst)
-                
-        self.gammas = nn.Parameter(torch.zeros(2, dtype=torch.float), requires_grad=True)
-        self.model.register_parameter('gammas', self.gammas)
-        
-        self.apply(init_weights)
     
     def diffusion(self, wbD, y, x):
         wb = wbD[:, 0:2] #[N, 2]
-        Dij = wbD[:, 2:6] #[N, 4]
-        
-        #Diagonal coefficients are positive
-        Dij[:, 0] = Dij[:, 0].exp()
-        Dij[:, 3] = Dij[:, 3].exp() 
+        Dij = wbD[:, 2:6] #[N, 4]  
+        #No restrictions on Diagonal coefficients
         
         grad_wb = gradient(wb, y, x) #[N, 2, 2]
         lapl_wb = div(grad_wb, y, x) #[N, 2]
@@ -499,89 +233,29 @@ class DiffusionNN_PINN(PINN):
               torch.einsum('bij,bij->b', grad_Dij[:,2:4], grad_wb)
         
         return torch.stack([D_w, D_b], dim=1)
-        
-    def phys_loss(self, wbD):
-        t, y, x = self.t_u, self.y_u, self.x_u
-        
-        dt_wb = gradient(wbD[:, 0:2], t)[..., 0] #[N, 2]
-        D_wb = self.diffusion(wbD, y, x) #[N, 2]
     
-        f_wb = dt_wb - D_wb
-        
-        return f_wb.pow(2).mean(dim=0).sum()
-    
-    def equation_string(self):
-        eq = '\n'
-        eq +=  f'  dt P_w = div( D_wi grad(P_i))\n'
-        eq +=  f'  dt P_b = div( D_bi grad(P_i))\n'
-            
-        return eq
-    
-class DiffusionDiagonalNN_PINN(DiffusionNN_PINN):
-    def diffusion(self, wbD, y, x):
-        wb = wbD[:, 0:2] #[N, 2]
-        Dij = wbD[:, 2:6] #[N, 4]
-        
-        #Diagonal coefficients are positive
-        Dij[:, 0] = Dij[:, 0].exp()
-        Dij[:, 3] = Dij[:, 3].exp() 
-        
+    def gamma_term(self, wb, y, x):
+        '''
+        Use the full gamma term Gamma_i \nabla \cdot [(1 - \sum_j \phi_j) \phi_i \nabla^3 \phi_i]
+        '''
         grad_wb = gradient(wb, y, x) #[N, 2, 2]
         lapl_wb = div(grad_wb, y, x) #[N, 2]
-        
-        grad_Dij = gradient(Dij, y, x)#[N, 4, 2]
-        
-        #Only allow diagonal contributions
-        D_w = torch.einsum('bj,bj->b', Dij[:,0:1], lapl_wb[:,0:1]) + \
-              torch.einsum('bij,bij->b', grad_Dij[:,0:1], grad_wb[:,0:1])
-        D_b = torch.einsum('bj,bj->b', Dij[:,3:4], lapl_wb[:,1:2]) + \
-              torch.einsum('bij,bij->b', grad_Dij[:,3:4], grad_wb[:,1:2])
-        
-        return torch.stack([D_w, D_b], dim=1)
-    
-class DiffusionNN_LinearPINN(DiffusionNN_PINN):
-    '''
-    Only include a linear Gamma term
-    '''
-    def phys_loss(self, wbD):
-        t, y, x = self.t_u, self.y_u, self.x_u
-        
-        dt_wb = gradient(wbD[:, 0:2], t)[..., 0] #[N, 2]
-        D_wb = self.diffusion(wbD, y, x) #[N, 2]
-        
-        
-        G_wb = linear_gamma(wbD[:, 0:2], y, x, self.gammas)
-        
-        f_wb = dt_wb - D_wb + G_wb
-        
-        return f_wb.pow(2).mean(dim=0).sum()
-        
-    def equation_string(self):
-        gammas = self.gammas.detach().cpu().numpy()
+        d3_wb = gradient(lapl_wb, y, x) #[N, 2, 2]
+        bihr_wb = div(d3_wb, y, x) #[N, 2]
 
-        eq = '\n'
-        eq +=  f'  dt P_w = div( D_wi grad(P_i)) - {gammas[0]:.3g} grad^4 P_w\n'
-        eq +=  f'  dt P_b = div( D_bi grad(P_i)) - {gammas[1]:.3g} grad^4 P_b\n'
+        pref = 1 - torch.sum(wb, dim=1, keepdims=True) #[N, 1]
+        grad_pref = -torch.sum(grad_wb, dim=1, keepdims=True) #[N, 1, 2]
+
+        G_wb  = pref * wb * bihr_wb #[N, 2]
+        G_wb += pref * torch.einsum('bij,bij->bi', grad_wb, d3_wb) #[N, 2]
+        G_wb += torch.einsum('bkj,bi,bij->bki', grad_pref, wb, d3_wb)[:, 0] #[N, 2]
+
+        gammas = self.gammas.exp()[None] #[1, 2]
+
+        return gammas * G_wb
             
-        return eq
-    
-    
-class DiffusionNN_FullSocioPINN(DiffusionNN_PINN):
-    def phys_loss(self, wbD):
-        t, y, x = self.t_u, self.y_u, self.x_u
-        
-        dt_wb = gradient(wbD[:, 0:2], t)[..., 0] #[N, 2]
-        D_wb = self.diffusion(wbD, y, x) #[N, 2]
-        
-        
-        G_wb = nonlinear_gamma(wbD[:, 0:2], y, x, self.gammas)
-        
-        f_wb = dt_wb - D_wb + G_wb
-        
-        return f_wb.pow(2).mean(dim=0).sum()
-        
     def equation_string(self):
-        gammas = self.gammas.detach().cpu().numpy()
+        gammas = self.gammas.exp().detach().cpu().numpy()
 
         eq = '\n'
         eq +=  f'  dt P_w = div( D_wi grad(P_i) - {gammas[0]:.3g} (1 - P) P_w grad^3 P_w )\n'  
@@ -589,3 +263,121 @@ class DiffusionNN_FullSocioPINN(DiffusionNN_PINN):
             
         return eq
     
+class LinearGammaPINN(PINN):
+    def gamma_term(self, wb, y, x):
+        '''
+        Use only the linear gamma term Gamma_i \nabla^4 \phi_i
+        gamma = [2]
+        '''
+        grad_wb = gradient(wb, y, x) #[N, 2, 2]
+        lapl_wb = div(grad_wb, y, x) #[N, 2]
+        d3_wb = gradient(lapl_wb, y, x) #[N, 2, 2]
+        bihr_wb = div(d3_wb, y, x) #[N, 2]
+
+        gammas = self.gammas.exp()[None] #[1, 2]
+
+        return gammas * G_wb
+    
+class DiagonalOnlyPINN(PINN):
+    '''
+    Model local diffusion matrix with a NN
+    No off-diagonal components, no Gamma terms
+    Linear stability requires both diagonal diffusion coefficients are positive
+    '''
+    def get_diffusion(self, D):
+        #Diagonal coefficients are positive
+        Dij = torch.zeros_like(D)
+        Dij[:, 0] += D[:, 0].exp()
+        Dij[:, 3] += D[:, 3].exp()
+        return Dij
+    
+    def diffusion(self, wbD, y, x):
+        wb = wbD[:, 0:2] #[N, 2]
+        D = wbD[:, 2:6] #[N, 4]
+        
+        #Diagonal coefficients are positive
+        Dij = torch.zeros_like(D)
+        Dij[:, 0] += D[:, 0].exp()
+        Dij[:, 3] += D[:, 3].exp()
+        
+        grad_wb = gradient(wb, y, x) #[N, 2, 2]
+        lapl_wb = div(grad_wb, y, x) #[N, 2]
+        
+        grad_Dij = gradient(Dij, y, x)#[N, 4, 2]
+        
+        D_w = torch.einsum('bj,bj->b', Dij[:,0:2], lapl_wb) + \
+              torch.einsum('bij,bij->b', grad_Dij[:,0:2], grad_wb)
+        D_b = torch.einsum('bj,bj->b', Dij[:,2:4], lapl_wb) + \
+              torch.einsum('bij,bij->b', grad_Dij[:,2:4], grad_wb)
+        
+        return torch.stack([D_w, D_b], dim=1)
+    
+    def gamma_term(self, wb, y, x):
+        return torch.zeros_like(wb)
+    
+    def equation_string(self):
+        eq = '\n'
+        eq +=  f'  dt P_a = div( D_aa grad(P_a))\n'
+        eq +=  f'  dt P_b = div( D_bb grad(P_b))\n'
+            
+        return eq
+    
+class SymmetricCrossDiffusionPINN(PINN):
+    '''
+    Model local diffusion matrix with a NN
+        Allow symmetric off-diagonal components, no gamma terms
+    Linear stability requires both eigenvalues of diffusion matrix are positive
+        For a matrix Dij = A    P
+                           P    B
+        The constraint that both eigenvalues are positive reduces to:
+            A > 0
+            B > 0
+            P^2 < AB
+    
+    No Gamma terms
+    Note that including anti-symmetric off-diagonal components requires
+        the gamma terms for stability
+    '''
+    def get_diffusion(self, D):
+        #Diagonal coefficients are positive
+        Dij = torch.zeros_like(D)
+        Dij[:, 0] += D[:, 0].exp()
+        Dij[:, 3] += D[:, 3].exp()
+        sqAB = torch.sqrt(D[:,0].exp() * D[:,3].exp()) #[N,]
+        Dij[:, 1] += D[:, 2].tanh() * sqAB # |D_+| < sqrt(D_a D_b)
+        Dij[:, 2] += D[:, 2].tanh() * sqAB # |D_+| < sqrt(D_a D_b)
+        return Dij
+    
+    def diffusion(self, wbD, y, x):
+        wb = wbD[:, 0:2] #[N, 2]
+        D = wbD[:, 2:6] #[N, 4]
+        
+        #Diagonal coefficients are positive
+        Dij = torch.zeros_like(D)
+        Dij[:, 0] += D[:, 0].exp()
+        Dij[:, 3] += D[:, 3].exp()
+        sqAB = torch.sqrt(D[:,0].exp() * D[:,3].exp()) #[N,]
+        Dij[:, 1] += D[:, 2].tanh() * sqAB # |D_+| < sqrt(D_a D_b)
+        Dij[:, 2] += D[:, 2].tanh() * sqAB # |D_+| < sqrt(D_a D_b)
+        
+        grad_wb = gradient(wb, y, x) #[N, 2, 2]
+        lapl_wb = div(grad_wb, y, x) #[N, 2]
+        
+        grad_Dij = gradient(Dij, y, x)#[N, 4, 2]
+        
+        D_w = torch.einsum('bj,bj->b', Dij[:,0:2], lapl_wb) + \
+              torch.einsum('bij,bij->b', grad_Dij[:,0:2], grad_wb)
+        D_b = torch.einsum('bj,bj->b', Dij[:,2:4], lapl_wb) + \
+              torch.einsum('bij,bij->b', grad_Dij[:,2:4], grad_wb)
+        
+        return torch.stack([D_w, D_b], dim=1)
+    
+    def gamma_term(self, wb, y, x):
+        return torch.zeros_like(wb)
+    
+    def equation_string(self):
+        eq = '\n'
+        eq +=  f'  dt P_a = div( D_aa grad(P_a) + D_+ grad(P_b))\n'
+        eq +=  f'  dt P_b = div( D_bb grad(P_b) + D_+ grad(P_b))\n'
+            
+        return eq

@@ -16,7 +16,7 @@ def pretrain(model, dataset, n_epochs, batch_size, device, pretrain_model=None, 
         gammas_init = torch.zeros(2, dtype=torch.float, device=device)
     else:
         gammas_init = pretrain_model.gammas.detach()
-        
+      
     print(f'Pretraining with target Gamma = {gammas_init.cpu().numpy()}')
 
     n_epochs = 100
@@ -31,14 +31,15 @@ def pretrain(model, dataset, n_epochs, batch_size, device, pretrain_model=None, 
                 batch = dataset[i]
                 batch['wb0'] = batch['wb0'].to(device)
                 batch['mask'] = torch.BoolTensor(batch['mask']).to(device)
-                batch['gammas'] = gammas_init
 
-                if pretrain_model is None:
-                    batch['Dij'] = batch['Dij'].to(device)
-                else:
-                    with d_ad.stop_annotating(), torch.no_grad():
-                        Dij, Dij_mesh, constants, J = pretrain_model.validation_step(batch)
-                        batch['Dij'] = Dij
+                with d_ad.stop_annotating(), torch.no_grad():
+                    if pretrain_model is None:
+                        batch['Dij'] = batch['Dij'].to(device)
+                        batch['gammas'] = gammas_init
+                    else:
+                            Dij, _, gammas = pretrain_model.forward(batch['wb0'][None])
+                            batch['Dij'] = Dij
+                            batch['gammas'] = gammas
 
                 loss, Dij, gammas = model.pretrain(batch)
                 loss_history.append(loss.item())
@@ -89,7 +90,7 @@ def train(model, dataset, n_epochs, batch_size, device, savedir='dynamic'):
                     if step % batch_size == 0:
                         pbar.set_postfix(
                             loss=np.mean(train_loss[-batch_size:]),
-                            gammas=gammas)
+                            gammas=constants.detach().cpu().numpy())
 
                         opt.step()
                         d_ad.set_working_tape(d_ad.Tape())
@@ -128,9 +129,11 @@ if __name__ == '__main__':
     parser.add_argument('--n_epochs', type=int, default=100)
     parser.add_argument('--batch_size', type=int, default=8)
     parser.add_argument('--modeltype', type=str, default='PBNN')
-    parser.add_argument('--pretrain', type=str, default=None)
+    parser.add_argument('--pretrain_model', type=str, default=None)
+    parser.add_argument('--load_model', type=str, default=None)
     parser.add_argument('--dynamic', action='store_true')
     parser.add_argument('--stationary', action='store_true')
+    parser.add_argument('--no_pretrain', action='store_true')
     args = parser.parse_args()
     
     if args.dynamic or not args.stationary:
@@ -143,16 +146,22 @@ if __name__ == '__main__':
     device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
     model = eval(args.modeltype)().to(device)
     
-    if args.pretrain:
-        info = torch.load(args.pretrain, map_location='cpu')
-        modeltype = os.path.basename(args.pretrain)
-        modeltype = modeltype.split('.')[0]
-        print(f'Pretraining to a {modeltype}')
-        pretrain_model = eval(modeltype)().to(device)
-        pretrain_model.load_state_dict(info['state_dict'])
-    else:
-        pretrain_model = None
+    if args.load_model:
+        info = torch.load(args.load_model, map_location='cpu')
+        model.load_state_dict(info['state_dict'])
     
-    pretrain(model, dataset, args.n_epochs, args.batch_size, device, pretrain_model, savedir)
-    train(model, dataset, args.n_epochs, args.batch_size, devices, savedir)
+    if not args.no_pretrain:
+        if args.pretrain_model:
+            info = torch.load(args.pretrain_model, map_location='cpu')
+            modeltype = os.path.basename(args.pretrain_model)
+            modeltype = modeltype.split('.')[0]
+            print(f'Pretraining to a {modeltype}')
+            pretrain_model = eval(modeltype)().to(device)
+            pretrain_model.load_state_dict(info['state_dict'])
+        else:
+            pretrain_model = None
+        
+        pretrain(model, dataset, args.n_epochs, args.batch_size, device, pretrain_model, savedir)
+    
+    train(model, dataset, args.n_epochs, args.batch_size, device, savedir)
 

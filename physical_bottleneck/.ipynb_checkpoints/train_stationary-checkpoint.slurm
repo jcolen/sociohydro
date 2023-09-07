@@ -17,4 +17,4 @@ module load python
 conda activate /project/vitelli/ml_venv
 
 cd /home/jcolen/sociohydro/physical_bottleneck
-python train_PBNN.py --modeltype DiagonalOnlyPBNN --stationary
+python train_PBNN.py --modeltype DiagonalOnlyPBNN --stationary --no_pretrain --load_model stationary/DiagonalOnlyPBNN_pretrain.ckpt

@@ -3,7 +3,11 @@ import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
 from torchvision import transforms
-from data_processing import scalar_img_to_mesh
+from data_processing import scalar_img_to_mesh, mesh_to_scalar_img
+
+import dolfin as dlf
+import dolfin_adjoint as d_ad
+from tqdm.auto import trange
 
 '''
 Building blocks
@@ -129,7 +133,55 @@ class PBNN(nn.Module):
             return Dij, Dij_mesh, gammas
     
         return Dij, None, gammas
-
+    
+    def simulate(self, sample, mesh, tmax, dt=0.1):
+        FctSpace = sample['FctSpace']
+        N = FctSpace.dim()
+        Dww = d_ad.Function(FctSpace)
+        Dwb = d_ad.Function(FctSpace)
+        Dbw = d_ad.Function(FctSpace)
+        Dbb = d_ad.Function(FctSpace)
+        w0 = scalar_img_to_mesh(sample['wb0'][0], sample['x'], sample['y'], sample['FctSpace'])
+        b0 = scalar_img_to_mesh(sample['wb0'][1], sample['x'], sample['y'], sample['FctSpace'])
+        
+        Dt = d_ad.Constant(dt)
+        x_verts = mesh.coordinates()[0]
+        y_verts = mesh.coordinates()[1]
+        x_img = sample['x']
+        y_img = sample['y']
+        mask = sample['mask']
+        
+        #Interpolate w0, b0 to grid
+        w_img = mesh_to_scalar_img(w0, mesh, x_img, y_img, mask)
+        b_img = mesh_to_scalar_img(b0, mesh, x_img, y_img, mask)
+        wb = torch.FloatTensor(np.stack([w_img, b_img])).to(sample['wb0'].device)
+        
+        steps = int(np.round(tmax / dt))
+        for i in trange(steps):
+            #Run PBNN to get Dij, constants and assign to variational parameters
+            _, Dij, gammas = self.forward(wb[None], sample['FctSpace'], (sample['x'], sample['y']))
+            Dij = Dij.detach().cpu().numpy()
+            gammas = gammas.detach().cpu().numpy()
+            Dww.vector()[:] = Dij[0]
+            Dwb.vector()[:] = Dij[1]
+            Dbw.vector()[:] = Dij[2]
+            Dbb.vector()[:] = Dij[3]
+            GammaW = d_ad.Constant(gammas[0])
+            GammaB = d_ad.Constant(gammas[1])
+                                               
+            #Solve variational problem and update w0, b0
+            wb, _, _ = sample['pde_forward'](Dww, Dwb, Dbw, Dbb, GammaW, GammaB, Dt, w0, b0, mesh)
+            w, b = wb.split(True)
+            w0.assign(w)
+            b0.assign(b)
+            
+            #Interpolate w0, b0 to grid
+            w_img = mesh_to_scalar_img(w0, mesh, x_img, y_img, mask)
+            b_img = mesh_to_scalar_img(b0, mesh, x_img, y_img, mask)
+            wb = torch.FloatTensor(np.stack([w_img, b_img])).to(sample['wb0'].device)
+                        
+        return w0, b0, wb
+        
 class DiagonalOnlyPBNN(PBNN):
     '''
     CNN computes local diffusion matrix from phi_W/B inputs
@@ -188,8 +240,9 @@ class SymmetricCrossDiffusionPBNN(PBNN):
         Dij = torch.zeros_like(D)
         Dij[0] += D[0].exp() #Positive D_A
         Dij[3] += D[3].exp() #Positive D_B
-        sqAB = torch.sqrt(Dij[0] * Dij[3])
-        Dij[1:3] += D_base[2].tanh() * sqAB # |D_+| < sqrt(D_a D_b)
+        sqAB = torch.sqrt(D[0].exp() * D[3].exp())
+        Dij[1] += D[2].tanh() * sqAB # |D_+| < sqrt(D_a D_b)
+        Dij[2] += D[2].tanh() * sqAB # |D_+| < sqrt(D_a D_b)
         Dij = self.blur(Dij)
         
         gammas = self.gammas * 0
