@@ -17,8 +17,9 @@ module load python
 conda activate /project/vitelli/ml_venv
 
 cd /home/jcolen/sociohydro/physical_bottleneck
-#python train_PBNN.py --modeltype DiagonalOnlyPBNN --dynamic --no_pretrain --load_model dynamic/DiagonalOnlyPBNN_pretrain.ckpt
 
-python train_PBNN.py --modeltype SymmetricCrossDiffusionPBNN --dynamic \
-    --load_model dynamic/SymmetricCrossDiffusionPBNN.ckpt \
-    --no_pretrain --n_epochs 200
+python train_PBNN.py \
+    --modeltype CrossDiffusionPBNN \
+    --savedir pipeline_8639583_1 \
+    --n_epochs 200 \
+    --no_pretrain

@@ -37,7 +37,7 @@ def scalar_img_to_mesh(img, x, y, FctSpace, vals_only=False):
     from github.com/schmittms/physical_bottleneck
     '''
     dof_coords = FctSpace.tabulate_dof_coordinates().copy() # Shape (Nnodes, 2)
-    
+        
     if isinstance(img, np.ndarray):
         mask = ~np.isnan(img)
         fct_vals = griddata((x[mask], y[mask]), img[mask], dof_coords)
@@ -66,10 +66,13 @@ def scalar_img_to_mesh(img, x, y, FctSpace, vals_only=False):
 class CensusDataset(torch.utils.data.Dataset):
     def __init__(self,
                  county='cook_IL',
-                 spatial_scale=1e3,):
+                 spatial_scale=1e3,
+                 housing_method='constant',
+                ):
         self.county = county
         self.spatial_scale = spatial_scale
         self.train = True
+        self.housing_method = housing_method
         self.init_data()
         
     def training(self):
@@ -94,12 +97,18 @@ class CensusDataset(torch.utils.data.Dataset):
         
         #Convert population to occupation fraction
         wb = np.stack([w_grid, b_grid], axis=1)
-        max_grid = np.sum(wb, axis=1).max(axis=0)
-        wb /= max_grid
+
+        if self.housing_method == 'constant':
+            print('Building dataset with constant housing in time')
+            self.housing = np.sum(wb, axis=1).max(axis=0)
+        else: #Housing can vary in time
+            print('Building dataset with time-varying housing')
+            self.housing = np.sum(wb, axis=1, keepdims=True)
+            
+        wb /= self.housing
         
         self.mask = np.all(~np.isnan(wb), axis=(0, 1))
         self.wb = interp1d(self.t, wb, axis=0, fill_value='extrapolate')
-        self.housing = max_grid
         
         self.mesh = d_ad.Mesh(f'/home/jcolen/sociohydro/data/{self.county}_mesh.xml')
             

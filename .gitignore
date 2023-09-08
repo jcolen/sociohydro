@@ -1,0 +1,5 @@
+.ipynb_checkpoints
+*.ckpt
+*.out
+__pycache__
+pipeline_*
