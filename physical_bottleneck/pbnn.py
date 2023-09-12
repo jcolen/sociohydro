@@ -269,14 +269,12 @@ class PBNN(nn.Module):
         return Dij, None, gammas
     
     def simulate(self, sample, mesh, tmax, dt=0.1):
-        FctSpace = sample['FctSpace']
-        N = FctSpace.dim()
-        Dww = d_ad.Function(FctSpace)
-        Dwb = d_ad.Function(FctSpace)
-        Dbw = d_ad.Function(FctSpace)
-        Dbb = d_ad.Function(FctSpace)
-        w0 = scalar_img_to_mesh(sample['wb0'][0], sample['x'], sample['y'], sample['FctSpace'])
-        b0 = scalar_img_to_mesh(sample['wb0'][1], sample['x'], sample['y'], sample['FctSpace'])
+        problem = sample['problem']
+        problem.dt.assign(d_ad.Constant(dt))
+        FctSpace = problem.FctSpace
+        Dij = [d_ad.Function(FctSpace) for i in range(4)]
+        wb0 = [scalar_img_to_mesh(sample['wb0'][i], sample['x'], sample['y'], FctSpace)
+               for i in range(2)]
         
         Dt = d_ad.Constant(dt)
         x_verts = mesh.coordinates()[0]
@@ -284,37 +282,53 @@ class PBNN(nn.Module):
         x_img = sample['x']
         y_img = sample['y']
         mask = sample['mask']
+        device = sample['wb0'].device
         
         #Interpolate w0, b0 to grid
-        w_img = mesh_to_scalar_img(w0, mesh, x_img, y_img, mask)
-        b_img = mesh_to_scalar_img(b0, mesh, x_img, y_img, mask)
-        wb = torch.FloatTensor(np.stack([w_img, b_img])).to(sample['wb0'].device)
+        for i in range(2):
+            problem.wb0[i].assign(scalar_img_to_mesh(sample['wb0'][i], x_img, y_img, FctSpace))
+        wb = torch.FloatTensor(np.stack([
+            mesh_to_scalar_img(wb0[i], mesh, x_img, y_img, mask) for i in range(2)]))
+        wb = wb.to(device)
         
         steps = int(np.round(tmax / dt))
-        for i in trange(steps):
+        for tt in trange(steps):
             #Run PBNN to get Dij, constants and assign to variational parameters
-            _, Dij, gammas = self.forward(wb[None], sample['FctSpace'], (sample['x'], sample['y']))
-            Dij = Dij.detach().cpu().numpy()
-            gammas = gammas.detach().cpu().numpy()
-            Dww.vector()[:] = Dij[0]
-            Dwb.vector()[:] = Dij[1]
-            Dbw.vector()[:] = Dij[2]
-            Dbb.vector()[:] = Dij[3]
-            GammaW = d_ad.Constant(gammas[0])
-            GammaB = d_ad.Constant(gammas[1])
-                                               
+            #_, Dij_mesh, gammas = self.forward(wb[None], FctSpace, (sample['x'], sample['y']))
+            _, Dij, gammas = self.forward(wb[None], FctSpace, (sample['x'], sample['y']))
+            params = {
+                'Dij': Dij,
+                'Gammas': gammas
+            }
+            problem.set_params(**params)
             #Solve variational problem and update w0, b0
-            wb, _, _ = sample['pde_forward'](Dww, Dwb, Dbw, Dbb, GammaW, GammaB, Dt, w0, b0, mesh)
+            wb = problem.forward()
             w, b = wb.split(True)
-            w0.assign(w)
-            b0.assign(b)
+            problem.wb0[0].assign(w)
+            problem.wb0[1].assign(b)
             
             #Interpolate w0, b0 to grid
-            w_img = mesh_to_scalar_img(w0, mesh, x_img, y_img, mask)
-            b_img = mesh_to_scalar_img(b0, mesh, x_img, y_img, mask)
-            wb = torch.FloatTensor(np.stack([w_img, b_img])).to(sample['wb0'].device)
+            wb = torch.FloatTensor(np.stack([
+                mesh_to_scalar_img(problem.wb0[i], mesh, x_img, y_img, mask) for i in range(2)]))
+            wb = wb.to(device)
                                     
-        return w0, b0, wb
+        return problem.wb0[0], problem.wb0[1], wb
+        for i in range(Dij_mesh.shape[0]):
+            Dij[i].vector()[:] = Dij_mesh[i].detach().cpu().numpy()
+        Gammas = [d_ad.Constant(gammas[i].item()) for i in range(2)]
+
+        #Solve variational problem and update w0, b0
+        wb, _, _ = sample['pde_forward'](*Dij, *Gammas, Dt, *wb0, mesh)
+        w, b = wb.split(True)
+        wb0[0].assign(w)
+        wb0[1].assign(b)
+
+        #Interpolate w0, b0 to grid
+        wb = torch.FloatTensor(np.stack([
+            mesh_to_scalar_img(wb0[i], mesh, x_img, y_img, mask) for i in range(2)]))
+        wb = wb.to(sample['wb0'].device)
+
+        return wb0[0], wb0[1], wb
         
 class DiagonalOnlyPBNN(PBNN):
     '''

@@ -19,7 +19,6 @@ conda activate /project/vitelli/ml_venv
 cd /home/jcolen/sociohydro/physical_bottleneck
 
 python train_PBNN.py \
-    --modeltype CrossDiffusionPBNN \
+    --modeltype SourcedSymmetricPBNN \
     --savedir pipeline_8639583_1 \
-    --n_epochs 200 \
-    --no_pretrain
+    --n_epochs 200
