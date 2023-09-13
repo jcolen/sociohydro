@@ -1,11 +1,21 @@
-from torch.utils.data import IterableDataset
-from scipy.interpolate import interp1d
+import torch
+from scipy.interpolate import interp1d, griddata
 from scipy.ndimage import gaussian_filter
 from scipy.interpolate import NearestNDInterpolator
 import numpy as np
+import h5py
+
+import ufl
+import dolfin as dlf
+import dolfin_adjoint as d_ad
+import pyadjoint as pyad
+
+from dolfin_problems import *
+
+dlf.set_log_level(40)
 
 
-def smooth_with_fill(arr, sigma=2):
+def smooth_with_fill(arr, sigma=3):
     msk = np.isnan(arr)
     mask = np.where(~msk)
 
@@ -15,295 +25,194 @@ def smooth_with_fill(arr, sigma=2):
     arr[msk] = np.nan
     return arr
 
-
-class SociohydrodynamicsDataset(IterableDataset):
-    def __init__(self, 
-                 filename='data/cook_IL.hdf5', 
-                 window_size=(32,24),
-                 batch_size=16,
-                 test_bbox=[20, 43, 60, 23]):
-        self.filename = filename
-        self.window_size = window_size
-        self.batch_size = batch_size
-
-        with h5py.File(filename, 'r') as d:
-            x_grid = d["x_grid"][:]
-            y_grid = d["y_grid"][:]
-            w_grid = d["w_grid_array_masked"][:]
-            b_grid = d["b_grid_array_masked"][:]
+class CensusDataset(torch.utils.data.Dataset):
+    def __init__(self,
+                 county='cook_IL',
+                 spatial_scale=1e3,
+                 housing_method='constant',
+                 get_dolfin=SociohydrodynamicsProblem,
+                ):
+        self.county = county
+        self.spatial_scale = spatial_scale
+        self.train = True
+        self.housing_method = housing_method
+        self.get_dolfin = get_dolfin
+        self.init_data()
+        
+    def training(self):
+        self.train = True
+    
+    def validate(self):
+        self.train = False
+    
+    def init_data(self):
+        with h5py.File(f'/home/jcolen/sociohydro/data/{self.county}.hdf5', 'r') as d:
+            x_grid = d["x_grid"][:] / self.spatial_scale
+            y_grid = d["y_grid"][:] / self.spatial_scale
+            w_grid = d["w_grid_array_masked"][:].transpose(2, 0, 1)
+            b_grid = d["b_grid_array_masked"][:].transpose(2, 0, 1)
             for i in range(5):
-                w_grid[..., i] = smooth_with_fill(w_grid[..., i])
-                b_grid[..., i] = smooth_with_fill(b_grid[..., i])
+                w_grid[i] = smooth_with_fill(w_grid[i])
+                b_grid[i] = smooth_with_fill(b_grid[i])
 
-        self.x = x_grid[0]
-        self.y = y_grid[:, 0]
-        self.t = np.array([1980, 1990, 2000, 2010, 2020])
+        self.x = x_grid
+        self.y = y_grid
+        self.t = np.array([1980, 1990, 2000, 2010, 2020], dtype=float)
+        
+        #Convert population to occupation fraction
+        wb = np.stack([w_grid, b_grid], axis=1)
 
-        self.w_func = interp1d(self.t, w_grid, axis=2)
-        self.b_func = interp1d(self.t, b_grid, axis=2)
-
-        y0, x0, h, w = test_bbox
-        w_test = w_grid[y0:y0+h, x0:x0+w].transpose(2, 0, 1)
-        b_test = b_grid[y0:y0+h, x0:x0+w].transpose(2, 0, 1)
-        self.test_batch = {
-            't': torch.from_numpy(self.t).float(),
-            'w': torch.from_numpy(w_test).float(),
-            'b': torch.from_numpy(b_test).float(),
+        if self.housing_method == 'constant':
+            print('Building dataset with constant housing in time')
+            self.housing = np.sum(wb, axis=1).max(axis=0)
+        else: #Housing can vary in time
+            print('Building dataset with time-varying housing')
+            self.housing = np.sum(wb, axis=1, keepdims=True)
+            
+        wb /= self.housing
+        
+        self.mask = np.all(~np.isnan(wb), axis=(0, 1))
+        self.wb = interp1d(self.t, wb, axis=0, fill_value='extrapolate')
+        
+        self.mesh = d_ad.Mesh(f'/home/jcolen/sociohydro/data/{self.county}_mesh.xml')
+    
+    def get_time(self, t, dt=1):
+        wb0 = self.wb(t)
+        wb1 = self.wb(t+dt)
+        
+        sample = {
+            't': t,
+            'x': self.x,
+            'y': self.y,
+            'mask': self.mask,
+            'dt': dt,
+            'wb0': self.wb(t),
+            'wb1': self.wb(t+dt),
         }
+        sample['problem'] = self.get_dolfin(self, sample)
+        return sample
+    
+    def __len__(self):
+        return int(np.ptp(self.t))
+    
+    def __getitem__(self, idx):
+        t0 = self.t[0] + idx
+        dt = 1
+        if self.train:
+            t0 += np.random.random()
+            dt *= np.random.random()
+            
+        sample = self.get_time(t0, dt)
+        sample['wb0'] = torch.FloatTensor(sample['wb0'])
+                
+        return sample
 
-
-    def __next__(self):
+class StationaryDataset(CensusDataset):
+    def get_dolfin(self, sample):
         '''
-        Yield a sample interpolated from the data
+        Generate reduced functional for calculating dJ/dD
+        Following github.com/schmittms/physical_bottleneck
         '''
-        t0 = np.random.random()
-        t1 =  t0 + (1 - t0) * np.random.random()
+        D_init = np.ones_like(self.x)
+        el = ufl.FiniteElement('CG', self.mesh.ufl_cell(), 1)
+        V  = dlf.FunctionSpace(self.mesh, el)    #W/B function space
+        VV = dlf.FunctionSpace(self.mesh, el*el)
+        
+        def forward(Dww, Dwb, Dbw, Dbb, GammaW, GammaB, dt, w0, b0, mesh):
+            '''Solve forward problem for given diffusion coefficients and Gamma terms'''
+            w, b = dlf.TrialFunctions(VV)
+            u, v = dlf.TestFunctions(VV)
+            
+            #dt(\phi_i) - grad(Dij grad(phi_j)) = 0
+            #Note that Danny's paper uses the opposite sign on Dij
+            #Stationary problem requires symmetric Dij
+            #To prevent Dij -> 0, we define diagonal components are positive and set DAA = 1 + DAA
+            Dpl = (Dwb + Dbw) / 2
+            a = w*u*ufl.dx + b*v*ufl.dx
+            a += dt * ufl.dot((1+Dww) * ufl.grad(w), ufl.grad(u)) * ufl.dx
+            a += dt * ufl.dot(Dpl * ufl.grad(b), ufl.grad(u)) * ufl.dx
+            a += dt * ufl.dot(Dpl * ufl.grad(w), ufl.grad(v)) * ufl.dx
+            a += dt * ufl.dot(Dbb * ufl.grad(b), ufl.grad(v)) * ufl.dx
+            
+            a -= dt * GammaW * ufl.dot((1 - w0 - b0) * w0 * ufl.grad(ufl.div(ufl.grad(w))), ufl.grad(u)) * ufl.dx
+            a -= dt * GammaB * ufl.dot((1 - w0 - b0) * b0 * ufl.grad(ufl.div(ufl.grad(b))), ufl.grad(v)) * ufl.dx
+            
+            L = w0*u*ufl.dx + b0*v*ufl.dx
+            
+            wb = d_ad.Function(VV)
+            d_ad.solve(a == L, wb)
+            return wb, a, L
+            
+        GammaW = d_ad.Constant(0., name='gammaW')
+        GammaB = d_ad.Constant(0., name='gammaB')
+        dt = d_ad.Constant(sample['dt'], name='dt')
+        
+        Dij_init = np.zeros([4, *self.x.shape])
+        Dij_init[0, sample['mask']] = 1
+        Dij_init[3, sample['mask']] = 1
 
-        t = np.array([t0, t1])
-        t = t * np.ptp(self.t) + self.t[0]
-
-        w = self.w_func(t)
-        b = self.b_func(t)
-
-        w_windows = sliding_window_view(w, self.window_size, axis=(0, 1))
-        b_windows = sliding_window_view(b, self.window_size, axis=(0, 1))
-
-        valid = np.logical_and(~np.isnan(w_windows), ~np.isnan(b_windows))
-        valid = np.all(valid, axis=(-1, -2, -3))
-        w_windows = w_windows[valid]
-        b_windows = b_windows[valid]
-
-        idx = np.random.choice(w_windows.shape[0], self.batch_size, replace=False)
-        w = w_windows[idx]
-        b = b_windows[idx]
-
+        Dww = scalar_img_to_mesh(Dij_init[0], self.x, self.y, V)
+        Dwb = scalar_img_to_mesh(Dij_init[1], self.x, self.y, V)
+        Dbw = scalar_img_to_mesh(Dij_init[2], self.x, self.y, V)
+        Dbb = scalar_img_to_mesh(Dij_init[3], self.x, self.y, V)
+        w0 = scalar_img_to_mesh(sample['wb0'][0], self.x, self.y, V)
+        b0 = scalar_img_to_mesh(sample['wb0'][1], self.x, self.y, V)
+        
+        wb, a, L = forward(Dww, Dwb, Dbw, Dbb, GammaW, GammaB, dt, w0, b0, self.mesh)
+        w, b = wb.split(True)
+        J = d_ad.assemble(ufl.dot(w - w0, w - w0) * ufl.dx + \
+                          ufl.dot(b - b0, b - b0) * ufl.dx)
+        
+        #Build controls to allow for updating values
+        control_Dww = d_ad.Control(Dww) 
+        control_Dwb = d_ad.Control(Dwb) 
+        control_Dbw = d_ad.Control(Dbw) 
+        control_Dbb = d_ad.Control(Dbb)
+        control_GammaW = d_ad.Control(GammaW)
+        control_GammaB = d_ad.Control(GammaB)
+        control_dt = d_ad.Control(dt)
+        control_w0 = d_ad.Control(w0)
+        control_b0 = d_ad.Control(b0)
+        
+        controls = [control_Dww, control_Dwb, control_Dbw, control_Dbb,
+                    control_GammaW, control_GammaB, control_dt, control_w0, control_b0]
+        Jhat_np = pyad.ReducedFunctionalNumPy(J, controls)
+        Jhat =    pyad.ReducedFunctional(J, controls)
+        
+        control_arr = [p.data() for p in Jhat_np.controls]
+        control_arr = Jhat_np.obj_to_array(control_arr)
+        
         return {
-            't': torch.from_numpy(t).float(),
-            'w': torch.from_numpy(w).float(),
-            'b': torch.from_numpy(b).float(),
+            'Jhat': Jhat_np,
+            'control_arr': control_arr,
+            'pde_forward': forward,
+            'FctSpace': V,
+            'base_RF': Jhat,
+            'J': J,
+            'Dij': torch.FloatTensor(Dij_init),
         }
-
-    def __iter__(self):
-        return self
-
-'''
-Implementation of numpy's sliding window view
-'''
-from numpy.core.numeric import normalize_axis_tuple
-from numpy.core.overrides import array_function_dispatch, set_module
-from numpy.lib.stride_tricks import as_strided
-
-def sliding_window_view(x, window_shape, axis=None, *,
-                        subok=False, writeable=False):
-    """
-    Create a sliding window view into the array with the given window shape.
-
-    Also known as rolling or moving window, the window slides across all
-    dimensions of the array and extracts subsets of the array at all window
-    positions.
-
-    .. versionadded:: 1.20.0
-
-    Parameters
-    ----------
-    x : array_like
-        Array to create the sliding window view from.
-    window_shape : int or tuple of int
-        Size of window over each axis that takes part in the sliding window.
-        If `axis` is not present, must have same length as the number of input
-        array dimensions. Single integers `i` are treated as if they were the
-        tuple `(i,)`.
-    axis : int or tuple of int, optional
-        Axis or axes along which the sliding window is applied.
-        By default, the sliding window is applied to all axes and
-        `window_shape[i]` will refer to axis `i` of `x`.
-        If `axis` is given as a `tuple of int`, `window_shape[i]` will refer to
-        the axis `axis[i]` of `x`.
-        Single integers `i` are treated as if they were the tuple `(i,)`.
-    subok : bool, optional
-        If True, sub-classes will be passed-through, otherwise the returned
-        array will be forced to be a base-class array (default).
-    writeable : bool, optional
-        When true, allow writing to the returned view. The default is false,
-        as this should be used with caution: the returned view contains the
-        same memory location multiple times, so writing to one location will
-        cause others to change.
-
-    Returns
-    -------
-    view : ndarray
-        Sliding window view of the array. The sliding window dimensions are
-        inserted at the end, and the original dimensions are trimmed as
-        required by the size of the sliding window.
-        That is, ``view.shape = x_shape_trimmed + window_shape``, where
-        ``x_shape_trimmed`` is ``x.shape`` with every entry reduced by one less
-        than the corresponding window size.
-
-    See Also
-    --------
-    lib.stride_tricks.as_strided: A lower-level and less safe routine for
-        creating arbitrary views from custom shape and strides.
-    broadcast_to: broadcast an array to a given shape.
-
-    Notes
-    -----
-    For many applications using a sliding window view can be convenient, but
-    potentially very slow. Often specialized solutions exist, for example:
-
-    - `scipy.signal.fftconvolve`
-
-    - filtering functions in `scipy.ndimage`
-
-    - moving window functions provided by
-      `bottleneck <https://github.com/pydata/bottleneck>`_.
-
-    As a rough estimate, a sliding window approach with an input size of `N`
-    and a window size of `W` will scale as `O(N*W)` where frequently a special
-    algorithm can achieve `O(N)`. That means that the sliding window variant
-    for a window size of 100 can be a 100 times slower than a more specialized
-    version.
-
-    Nevertheless, for small window sizes, when no custom algorithm exists, or
-    as a prototyping and developing tool, this function can be a good solution.
-
-    Examples
-    --------
-    >>> x = np.arange(6)
-    >>> x.shape
-    (6,)
-    >>> v = sliding_window_view(x, 3)
-    >>> v.shape
-    (4, 3)
-    >>> v
-    array([[0, 1, 2],
-           [1, 2, 3],
-           [2, 3, 4],
-           [3, 4, 5]])
-
-    This also works in more dimensions, e.g.
-
-    >>> i, j = np.ogrid[:3, :4]
-    >>> x = 10*i + j
-    >>> x.shape
-    (3, 4)
-    >>> x
-    array([[ 0,  1,  2,  3],
-           [10, 11, 12, 13],
-           [20, 21, 22, 23]])
-    >>> shape = (2,2)
-    >>> v = sliding_window_view(x, shape)
-    >>> v.shape
-    (2, 3, 2, 2)
-    >>> v
-    array([[[[ 0,  1],
-             [10, 11]],
-            [[ 1,  2],
-             [11, 12]],
-            [[ 2,  3],
-             [12, 13]]],
-           [[[10, 11],
-             [20, 21]],
-            [[11, 12],
-             [21, 22]],
-            [[12, 13],
-             [22, 23]]]])
-
-    The axis can be specified explicitly:
-
-    >>> v = sliding_window_view(x, 3, 0)
-    >>> v.shape
-    (1, 4, 3)
-    >>> v
-    array([[[ 0, 10, 20],
-            [ 1, 11, 21],
-            [ 2, 12, 22],
-            [ 3, 13, 23]]])
-
-    The same axis can be used several times. In that case, every use reduces
-    the corresponding original dimension:
-
-    >>> v = sliding_window_view(x, (2, 3), (1, 1))
-    >>> v.shape
-    (3, 1, 2, 3)
-    >>> v
-    array([[[[ 0,  1,  2],
-             [ 1,  2,  3]]],
-           [[[10, 11, 12],
-             [11, 12, 13]]],
-           [[[20, 21, 22],
-             [21, 22, 23]]]])
-
-    Combining with stepped slicing (`::step`), this can be used to take sliding
-    views which skip elements:
-
-    >>> x = np.arange(7)
-    >>> sliding_window_view(x, 5)[:, ::2]
-    array([[0, 2, 4],
-           [1, 3, 5],
-           [2, 4, 6]])
-
-    or views which move by multiple elements
-
-    >>> x = np.arange(7)
-    >>> sliding_window_view(x, 3)[::2, :]
-    array([[0, 1, 2],
-           [2, 3, 4],
-           [4, 5, 6]])
-
-    A common application of `sliding_window_view` is the calculation of running
-    statistics. The simplest example is the
-    `moving average <https://en.wikipedia.org/wiki/Moving_average>`_:
-
-    >>> x = np.arange(6)
-    >>> x.shape
-    (6,)
-    >>> v = sliding_window_view(x, 3)
-    >>> v.shape
-    (4, 3)
-    >>> v
-    array([[0, 1, 2],
-           [1, 2, 3],
-           [2, 3, 4],
-           [3, 4, 5]])
-    >>> moving_average = v.mean(axis=-1)
-    >>> moving_average
-    array([1., 2., 3., 4.])
-
-    Note that a sliding window approach is often **not** optimal (see Notes).
-    """
-    window_shape = (tuple(window_shape)
-                    if np.iterable(window_shape)
-                    else (window_shape,))
-    # first convert input to array, possibly keeping subclass
-    x = np.array(x, copy=False, subok=subok)
-
-    window_shape_array = np.array(window_shape)
-    if np.any(window_shape_array < 0):
-        raise ValueError('`window_shape` cannot contain negative values')
-
-    if axis is None:
-        axis = tuple(range(x.ndim))
-        if len(window_shape) != len(axis):
-            raise ValueError(f'Since axis is `None`, must provide '
-                             f'window_shape for all dimensions of `x`; '
-                             f'got {len(window_shape)} window_shape elements '
-                             f'and `x.ndim` is {x.ndim}.')
-    else:
-        axis = normalize_axis_tuple(axis, x.ndim, allow_duplicate=True)
-        if len(window_shape) != len(axis):
-            raise ValueError(f'Must provide matching length window_shape and '
-                             f'axis; got {len(window_shape)} window_shape '
-                             f'elements and {len(axis)} axes elements.')
-
-    out_strides = x.strides + tuple(x.strides[ax] for ax in axis)
-
-    # note: same axis can be windowed repeatedly
-    x_shape_trimmed = list(x.shape)
-    for ax, dim in zip(axis, window_shape):
-        if x_shape_trimmed[ax] < dim:
-            raise ValueError(
-                'window shape cannot be larger than input array shape')
-        x_shape_trimmed[ax] -= dim - 1
-    out_shape = tuple(x_shape_trimmed) + window_shape
-    return as_strided(x, strides=out_strides, shape=out_shape,
-                      subok=subok, writeable=writeable)
+    
+    
+    def get_time(self, t):
+        wb0 = self.wb(t)
+        
+        sample = {
+            't': t,
+            'x': self.x,
+            'y': self.y,
+            'mask': self.mask,
+            'dt': 1,
+            'wb0': self.wb(t),
+        }
+        pde = self.get_dolfin(sample)
+        return {**sample, **pde}
+    
+    def __getitem__(self, idx):
+        t0 = self.t[0] + idx
+        if self.train:
+            t0 += np.random.random()
+            
+        sample = self.get_time(t0)
+        sample['wb0'] = torch.FloatTensor(sample['wb0'])
+                
+        return sample

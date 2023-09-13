@@ -332,3 +332,11 @@ class SourcedSymmetricPBNN(PBNN):
         params['Dij'] = Dij
         
         return params
+    
+
+class DerivativePBNN(PBNN):
+    def forward(self, wb0, FctSpace=None, xy=None):
+        params = super().forward(wb0, FctSpace, xy)
+        params['Gammas'] = params['Gammas'] * 0 #Don't allow gamma
+        params['Dij'] = params['Dij'] * 0 #Don't allow Dij
+        return params    
