@@ -3,7 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
 from torchvision import transforms
-from data_processing import scalar_img_to_mesh, mesh_to_scalar_img
+from dolfin_problems import *
 
 import dolfin as dlf
 import dolfin_adjoint as d_ad
@@ -11,69 +11,7 @@ from tqdm.auto import trange, tqdm
 
 '''
 Training scripts
-'''
-def pretrain(model, dataset, n_epochs, batch_size, device, savedir='dynamic',
-             pretrain_model=None,):
-    '''
-    Pretrain a model to produce reasonable or fixed parameters
-    '''
-    opt = torch.optim.Adam(model.parameters(), lr=3e-4)
-    sch = torch.optim.lr_scheduler.ExponentialLR(opt, gamma=0.98)
-    loss_history = []
-
-    if pretrain_model is None:
-        gammas_init = torch.zeros(2, dtype=torch.float, device=device)
-    else:
-        gammas_init = pretrain_model.gammas.detach()
-
-    print(f'Pretraining with target Gamma = {gammas_init.cpu().numpy()}')
-
-    step = 0
-    batch_size = 8
-    idxs = np.arange(len(dataset), dtype=int)
-
-    with tqdm(total=n_epochs*len(dataset)) as ebar:
-        for epoch in range(n_epochs):
-            np.random.shuffle(idxs)
-            d_ad.set_working_tape(d_ad.Tape())
-            for i in range(len(dataset)):
-                batch = dataset[idxs[i]]
-                batch['wb0'] = batch['wb0'].to(device)
-                batch['mask'] = torch.BoolTensor(batch['mask']).to(device)
-
-                with d_ad.stop_annotating(), torch.no_grad():
-                    if pretrain_model is None:
-                        batch['Dij'] = batch['Dij'].to(device)
-                        batch['gammas'] = gammas_init
-                    else:
-                        Dij, _, gammas = pretrain_model.forward(batch['wb0'][None])
-                        batch['Dij'] = Dij
-                        batch['gammas'] = gammas
-
-                loss, Dij, gammas = model.pretrain(batch)
-                loss_history.append(loss.item())
-                step += 1
-                ebar.update()
-
-                if step % batch_size == 0:
-                    ebar.set_postfix(
-                        loss=np.mean(loss_history[-len(dataset):]),
-                        gammas=gammas)
-
-                    opt.step()
-                    d_ad.set_working_tape(d_ad.Tape())
-                    opt.zero_grad()
-
-
-            torch.save(
-                {
-                    'state_dict': model.state_dict(),
-                    'loss_history': loss_history,
-                },
-                f'{savedir}/{model.__class__.__name__}_pretrain.ckpt')
-
-            sch.step()
-            
+'''         
 def train(model, dataset, n_epochs, batch_size, device, savedir='dynamic'):
     '''
     Train a model
@@ -89,6 +27,7 @@ def train(model, dataset, n_epochs, batch_size, device, savedir='dynamic'):
     
     with tqdm(total=n_epochs) as pbar:
         for epoch in range(n_epochs):
+            model.train()
             for ds in dataset.datasets:
                 ds.training()
             np.random.shuffle(idxs)
@@ -99,20 +38,19 @@ def train(model, dataset, n_epochs, batch_size, device, savedir='dynamic'):
                     batch = dataset[idxs[i]]
                     batch['wb0'] = batch['wb0'].to(device)
 
-                    Dij, Dij_mesh, constants, J, dJdD = model.training_step(batch)
+                    params, J = model.training_step(batch)
                     train_loss.append(J)
                     step += 1
                     ebar.update()
 
                     if step % batch_size == 0:
-                        ebar.set_postfix(
-                            loss=np.mean(train_loss[-batch_size:]),
-                            gammas=constants.detach().cpu().numpy())
+                        ebar.set_postfix(loss=np.mean(train_loss[-batch_size:]))
 
                         opt.step()
                         d_ad.set_working_tape(d_ad.Tape())
                         opt.zero_grad()
 
+            model.eval()
             for ds in dataset.datasets:
                 ds.validate()
             val_loss.append(0)
@@ -124,7 +62,7 @@ def train(model, dataset, n_epochs, batch_size, device, savedir='dynamic'):
                         batch = dataset[i]
                         batch['wb0'] = batch['wb0'].to(device)
 
-                        Dij, Dij_mesh, constants, J = model.validation_step(batch)
+                        params, J = model.validation_step(batch)
                         val_loss[epoch] += J
                         ebar.update()
 
@@ -151,19 +89,23 @@ class Sin(nn.Module):
         return torch.sin(x)
 
 class ConvNextBlock(nn.Module):
-    def __init__(self, in_channels, out_channels, kernel_size=7):
+    def __init__(self, in_channels, out_channels, kernel_size=7, dropout_rate=0.):
         super().__init__()
 
         self.conv1 = nn.Conv2d(in_channels, out_channels, kernel_size=kernel_size, 
                                padding='same', padding_mode='replicate', groups=in_channels)
         self.conv2 = nn.Conv2d(out_channels, 4*out_channels, kernel_size=1)
         self.conv3 = nn.Conv2d(4*out_channels, out_channels, kernel_size=1)
+        
+        self.dropout = nn.Dropout(p=dropout_rate)
 
     def forward(self, x):
         x = self.conv1(x)
         x = self.conv2(x)
         x = torch.sin(x)
         x = self.conv3(x)
+        
+        x = self.dropout(x)
         return x
     
 '''
@@ -178,7 +120,8 @@ class PBNN(nn.Module):
     def __init__(self,
                  kernel_size=7,
                  N_hidden=8,
-                 hidden_size=64):
+                 hidden_size=64,
+                 dropout_rate=0.1):
         super().__init__()
         
         self.kernel_size = kernel_size
@@ -187,98 +130,99 @@ class PBNN(nn.Module):
         
         self.gammas = nn.Parameter(torch.zeros(2, dtype=torch.float), requires_grad=True)
         
-        self.read_in = ConvNextBlock(2, hidden_size, kernel_size)
-        self.read_out = nn.Conv2d(hidden_size, 4, kernel_size=1)
-        self.cnn = nn.ModuleList()
+        self.read_in = ConvNextBlock(2, hidden_size, kernel_size, dropout_rate)
+        self.downsample = nn.Sequential(
+            nn.Conv2d(hidden_size, hidden_size, kernel_size=4, stride=4),
+            nn.GELU()
+        )
+        self.read_out = nn.Conv2d(2*hidden_size, 6, kernel_size=1)
+        
+        self.cnn1 = nn.ModuleList()
+        self.cnn2 = nn.ModuleList()
         for i in range(N_hidden):
-            self.cnn.append(ConvNextBlock(hidden_size, hidden_size, kernel_size))
+            self.cnn1.append(ConvNextBlock(hidden_size, hidden_size, kernel_size))
+            self.cnn2.append(ConvNextBlock(hidden_size, hidden_size, kernel_size))
             
-        self.blur = transforms.GaussianBlur(kernel_size, sigma=1)
+        self.blur = transforms.GaussianBlur(kernel_size, sigma=(0.1, 3))
         self.device = torch.device('cpu')        
     
-    def pretrain(self, sample):        
-        Dij, _, gammas = self.forward(sample['wb0'][None])
-        if 'mask' in sample:
-            mask = sample['mask']
-            loss = F.mse_loss(Dij[:, mask], sample['Dij'][:, mask])
-        else:
-            loss = F.mse_loss(Dij, sample['Dij'])
-        
-        loss += F.mse_loss(gammas, sample['gammas'])
-        loss.backward()
-        
-        return loss, Dij.detach().cpu().numpy(), self.gammas.detach().cpu().numpy()
-    
     def training_step(self, sample):
-        Dij, Dij_mesh, constants = self.forward(sample['wb0'][None], 
-                                                sample['FctSpace'], 
-                                                (sample['x'], sample['y']))
-        N = sample['FctSpace'].dim()
-        D = len(Dij_mesh)
+        problem = sample['problem']
+        params = self.forward(sample['wb0'][None], 
+                              problem.FctSpace, 
+                              (sample['x'], sample['y']))
+        for key in params:
+            params[key] = params[key].flatten()
+        problem.set_params(**params)
+        loss = problem.residual()
+        grad = problem.grad(sample['wb0'].device)
 
-        Dij_mesh = Dij_mesh.flatten()
-        control_arr = sample['control_arr'].copy()
-        control_arr[:D*N] = Dij_mesh.detach().cpu().numpy()
-        control_arr[D*N:D*N+len(constants)] = constants.detach().cpu().numpy()
-        control_arr[D*N+len(constants)] = sample['dt']
+        DS = torch.cat([params['Dij'], params['Si']])
+        DS.backward(gradient=grad['DS'] / sample['dt'])
+        params['Gammas'].backward(gradient=grad['Gammas'] / sample['dt'])
         
-        J = sample['Jhat'](control_arr)
-        dJdD = sample['Jhat'].derivative(control_arr, forget=True, project=False)
-        grad = torch.tensor(dJdD, device=Dij.device) / sample['dt']
-        
-        Dij_mesh.backward(gradient=grad[:D*N])
-        constants.backward(gradient=grad[D*N:D*N+len(constants)])
-        
-        return Dij, Dij_mesh, constants, J, dJdD
+        return params, loss
     
     def validation_step(self, sample):
-        Dij, Dij_mesh, constants = self.forward(sample['wb0'][None], 
-                                                sample['FctSpace'], 
-                                                (sample['x'], sample['y']))
-        N = sample['FctSpace'].dim()
-        D = len(Dij_mesh)
-
-        Dij_mesh = Dij_mesh.flatten()
-        control_arr = sample['control_arr'].copy()
-        control_arr[:D*N] = Dij_mesh.detach().cpu().numpy()
-        control_arr[D*N:D*N+len(constants)] = constants.detach().cpu().numpy()
-        control_arr[D*N+len(constants)] = sample['dt']
+        problem = sample['problem']
+        params = self.forward(sample['wb0'][None], 
+                              problem.FctSpace, 
+                              (sample['x'], sample['y']))
         
-        J = sample['Jhat'](control_arr)
-        
-        return Dij, Dij_mesh, constants, J
+        problem.set_params(**params)
+        loss = problem.residual()
+                
+        return params, loss
     
-    def forward(self, wb0, FctSpace=None, xy=None):
+    def forward(self, wb0, FctSpace, xy):
+        assert FctSpace is not None
+        assert xy is not None
+        
+        #Neural network part
         wb0[wb0.isnan()] = 0
-        D = self.read_in(wb0)
-        for cell in self.cnn:
-            D = D + cell(D)
-        D = self.read_out(D).squeeze()
         
-        Dij = self.blur(D)
+        x = self.read_in(wb0)
+        for cell in self.cnn1:
+            x = x + cell(x)
+        latent = self.downsample(x)
+        for cell in self.cnn2:
+            latent = latent + cell(latent)
+        latent = F.interpolate(latent, x.shape[-2:])
+        x = torch.cat([x, latent], dim=1)
+        DS = self.read_out(x).squeeze()
+        
+        #Separate data and postprocess
+        D = DS[:4]
+        S = DS[4:]
+        
+        if self.training:
+            Dij = self.blur(D)
+            Si  = self.blur(S)
+        else:
+            Dij = D
+            Si = S
+        
         gammas = self.gammas.exp() #Gammas are positive
-                
-        if FctSpace is not None:
-            assert xy is not None
-            Dij_mesh = torch.zeros([Dij.shape[0], FctSpace.dim()], dtype=Dij.dtype, device=Dij.device)
-            for i in range(Dij.shape[0]):
-                Dij_mesh[i] = scalar_img_to_mesh(Dij[i], *xy, FctSpace, vals_only=True)
-                
-            return Dij, Dij_mesh, gammas
-    
-        return Dij, None, gammas
+
+        Dij_mesh = torch.zeros([Dij.shape[0], FctSpace.dim()], dtype=Dij.dtype, device=Dij.device)
+        Si_mesh  = torch.zeros([Si.shape[0],  FctSpace.dim()], dtype=Si.dtype,  device=Si.device)
+        for i in range(Dij.shape[0]):
+            Dij_mesh[i] = scalar_img_to_mesh(Dij[i], *xy, FctSpace, vals_only=True)
+        for i in range(Si.shape[0]):
+            Si_mesh[i] = scalar_img_to_mesh(Si[i], *xy, FctSpace, vals_only=True)
+        
+        return {
+            'Dij': Dij_mesh, 
+            'Si': Si_mesh, 
+            'Gammas': gammas,
+        }
     
     def simulate(self, sample, mesh, tmax, dt=0.1):
         problem = sample['problem']
         problem.dt.assign(d_ad.Constant(dt))
         FctSpace = problem.FctSpace
-        Dij = [d_ad.Function(FctSpace) for i in range(4)]
-        wb0 = [scalar_img_to_mesh(sample['wb0'][i], sample['x'], sample['y'], FctSpace)
-               for i in range(2)]
         
         Dt = d_ad.Constant(dt)
-        x_verts = mesh.coordinates()[0]
-        y_verts = mesh.coordinates()[1]
         x_img = sample['x']
         y_img = sample['y']
         mask = sample['mask']
@@ -287,20 +231,18 @@ class PBNN(nn.Module):
         #Interpolate w0, b0 to grid
         for i in range(2):
             problem.wb0[i].assign(scalar_img_to_mesh(sample['wb0'][i], x_img, y_img, FctSpace))
+
         wb = torch.FloatTensor(np.stack([
-            mesh_to_scalar_img(wb0[i], mesh, x_img, y_img, mask) for i in range(2)]))
+            mesh_to_scalar_img(problem.wb0[i], mesh, x_img, y_img, mask) for i in range(2)]))
         wb = wb.to(device)
         
         steps = int(np.round(tmax / dt))
         for tt in trange(steps):
             #Run PBNN to get Dij, constants and assign to variational parameters
-            #_, Dij_mesh, gammas = self.forward(wb[None], FctSpace, (sample['x'], sample['y']))
-            _, Dij, gammas = self.forward(wb[None], FctSpace, (sample['x'], sample['y']))
-            params = {
-                'Dij': Dij,
-                'Gammas': gammas
-            }
+            params = self.forward(wb[None], FctSpace, (x_img, y_img))
+            params['Si'] *= 1
             problem.set_params(**params)
+            
             #Solve variational problem and update w0, b0
             wb = problem.forward()
             w, b = wb.split(True)
@@ -313,22 +255,6 @@ class PBNN(nn.Module):
             wb = wb.to(device)
                                     
         return problem.wb0[0], problem.wb0[1], wb
-        for i in range(Dij_mesh.shape[0]):
-            Dij[i].vector()[:] = Dij_mesh[i].detach().cpu().numpy()
-        Gammas = [d_ad.Constant(gammas[i].item()) for i in range(2)]
-
-        #Solve variational problem and update w0, b0
-        wb, _, _ = sample['pde_forward'](*Dij, *Gammas, Dt, *wb0, mesh)
-        w, b = wb.split(True)
-        wb0[0].assign(w)
-        wb0[1].assign(b)
-
-        #Interpolate w0, b0 to grid
-        wb = torch.FloatTensor(np.stack([
-            mesh_to_scalar_img(wb0[i], mesh, x_img, y_img, mask) for i in range(2)]))
-        wb = wb.to(sample['wb0'].device)
-
-        return wb0[0], wb0[1], wb
         
 class DiagonalOnlyPBNN(PBNN):
     '''
@@ -336,30 +262,17 @@ class DiagonalOnlyPBNN(PBNN):
     No off-diagonal components, no Gamma terms
     Linear stability requires both diagonal diffusion coefficients are positive
     '''
-    def forward(self, wb0, FctSpace=None, xy=None):
-        wb0[wb0.isnan()] = 0
-        D = self.read_in(wb0)
-        for cell in self.cnn:
-            D = D + cell(D)
-        D = self.read_out(D).squeeze()
+    def forward(self, wb0, FctSpace, xy):
+        params = super().forward(wb0, FctSpace, xy)
+        params['Si'] *= 0 #Don't allow Si
+        params['Gammas'] = params['Gammas'] * 0 #Don't allow gamma
         
-        #Diagonal components should be positive
-        Dij = torch.zeros_like(D)
-        Dij[0] += D[0].exp() #Positive D_A
-        Dij[3] += D[3].exp() #Positive D_B
-        Dij = self.blur(Dij)
+        D = params['Dij'].clone()
+        params['Dij'][1:3] *= 0
+        params['Dij'][0] = D[0].exp()
+        params['Dij'][3] = D[3].exp()
         
-        gammas = self.gammas * 0
-                
-        if FctSpace is not None:
-            assert xy is not None
-            Dij_mesh = torch.zeros([Dij.shape[0], FctSpace.dim()], dtype=Dij.dtype, device=Dij.device)
-            for i in range(Dij.shape[0]):
-                Dij_mesh[i] = scalar_img_to_mesh(Dij[i], *xy, FctSpace, vals_only=True)
-                
-            return Dij, Dij_mesh, gammas
-    
-        return Dij, None, gammas
+        return params
     
 class SymmetricCrossDiffusionPBNN(PBNN):
     '''
@@ -377,33 +290,22 @@ class SymmetricCrossDiffusionPBNN(PBNN):
     Note that including anti-symmetric off-diagonal components requires
         the gamma terms for stability
     '''
-    def forward(self, wb0, FctSpace=None, xy=None):
-        wb0[wb0.isnan()] = 0
-        D = self.read_in(wb0)
-        for cell in self.cnn:
-            D = D + cell(D)
-        D = self.read_out(D).squeeze()
+    def forward(self, wb0, FctSpace, xy):
+        params = super().forward(wb0, FctSpace, xy)
+        params['Si'] *= 0 #Don't allow Si
+        params['Gammas'] = params['Gammas'] * 0 #Don't allow gamma
         
-        #Diagonal components should be positive
+        D = params['Dij']
+        
         Dij = torch.zeros_like(D)
         Dij[0] += D[0].exp() #Positive D_A
         Dij[3] += D[3].exp() #Positive D_B
         sqAB = torch.sqrt(D[0].exp() * D[3].exp())
         Dij[1] += D[2].tanh() * sqAB # |D_+| < sqrt(D_a D_b)
         Dij[2] += D[2].tanh() * sqAB # |D_+| < sqrt(D_a D_b)
-        Dij = self.blur(Dij)
+        params['Dij'] = Dij
         
-        gammas = self.gammas * 0
-                
-        if FctSpace is not None:
-            assert xy is not None
-            Dij_mesh = torch.zeros([Dij.shape[0], FctSpace.dim()], dtype=Dij.dtype, device=Dij.device)
-            for i in range(Dij.shape[0]):
-                Dij_mesh[i] = scalar_img_to_mesh(Dij[i], *xy, FctSpace, vals_only=True)
-                
-            return Dij, Dij_mesh, gammas
-    
-        return Dij, None, gammas
+        return params
     
 class CrossDiffusionPBNN(PBNN):
     '''
@@ -429,41 +331,42 @@ class CrossDiffusionPBNN(PBNN):
     No Gamma terms
     '''
     def forward(self, wb0, FctSpace=None, xy=None):
-        wb0[wb0.isnan()] = 0
-        D = self.read_in(wb0)
-        for cell in self.cnn:
-            D = D + cell(D)
-        D = self.read_out(D).squeeze()
-        Dij = torch.zeros_like(D)
-
-        #Eigenvalues must be positive
-        '''
-        Dij[3] += D[3] #D_{BB} can be anything
-        Dij[0] += D[0].exp() - D[3] #D_{AA} runs from -D_{BB} to infinity
-
-        bound1 = D[3] * (D[0].exp() - D[3]) #D_{AA} * D_{BB}
-        bound2 = -0.25 * (D[0].exp() - 2*D[3]).pow(2) #-(D_{AA} - D_{BB})^2 / 4
-        
-        #D_{BW} \times D_{WB} lies between bound1 and bound2
-        lower = torch.min(torch.stack([bound1, bound2]), dim=0)[0]
-        upper = torch.max(torch.stack([bound1, bound2]), dim=0)[0]
-        prod = lower + D[1].tanh() * (upper - lower) #tanh satisfies boundaries
-        Dij[1] += prod / D[2]
-        Dij[1, D[2] == 0] = prod[D[2] == 0]
-        Dij[2] += D[2]
-        '''
-        Dij += D
-
-        Dij = self.blur(Dij)
-        
-        gammas = self.gammas * 0
-                
-        if FctSpace is not None:
-            assert xy is not None
-            Dij_mesh = torch.zeros([Dij.shape[0], FctSpace.dim()], dtype=Dij.dtype, device=Dij.device)
-            for i in range(Dij.shape[0]):
-                Dij_mesh[i] = scalar_img_to_mesh(Dij[i], *xy, FctSpace, vals_only=True)
-                
-            return Dij, Dij_mesh, gammas
+        params = super().forward(wb0, FctSpace, xy)
+        params['Si'] *= 0 #Don't allow Si
+        params['Gammas'] = params['Gammas'] * 0 #Don't allow gamma
+        return params
     
-        return Dij, None, gammas
+'''
+Models for testing "model-free" type predictions
+'''
+
+class SourcedOnlyPBNN(PBNN):
+    def forward(self, wb0, FctSpace=None, xy=None):
+        params = super().forward(wb0, FctSpace, xy)
+        params['Gammas'] = params['Gammas'] * 0 #Don't allow gamma
+        params['Dij'] = params['Dij'] * 0 #Don't allow Dij
+        return params 
+    
+class SourcedDiffusionPBNN(PBNN):
+    def forward(self, wb0, FctSpace=None, xy=None):
+        params = super().forward(wb0, FctSpace, xy)
+        params['Gammas'] = params['Gammas'] * 0 #Don't allow gamma
+        return params  
+    
+class SourcedSymmetricPBNN(PBNN):
+    def forward(self, wb0, FctSpace, xy):
+        params = super().forward(wb0, FctSpace, xy)
+        params['Gammas'] = params['Gammas'] * 0 #Don't allow gamma
+        
+        D = params['Dij']
+        
+        Dij = torch.zeros_like(D)
+        Dij[0] += D[0].exp() #Positive D_A
+        Dij[3] += D[3].exp() #Positive D_B
+        sqAB = torch.sqrt(D[0].exp() * D[3].exp())
+        Dij[1] += D[2].tanh() * sqAB # |D_+| < sqrt(D_a D_b)
+        Dij[2] += D[2].tanh() * sqAB # |D_+| < sqrt(D_a D_b)
+        params['Dij'] = Dij
+        
+        return params
+ 

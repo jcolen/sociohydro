@@ -1,0 +1,12 @@
+{
+  "county": [
+    "wayne_MI"
+  ],
+  "n_epochs": 250,
+  "pretrain_epochs": 100,
+  "batch_size": 8,
+  "modeltype": "PBNN",
+  "load_model": null,
+  "savedir": ".",
+  "housing_method": "constant"
+}

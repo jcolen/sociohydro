@@ -6,7 +6,7 @@ from tqdm.auto import tqdm
 from argparse import ArgumentParser
 
 from data_processing import *
-from sourced_pbnn import *
+from pbnn import *
 
 if __name__ == '__main__':
     parser = ArgumentParser()

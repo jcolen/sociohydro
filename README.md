@@ -9,5 +9,3 @@ The notebooks contained in this repo are:
 - Fenics_data.ipynb - The one where all of the example Fenics implementations are for running on Census data. Does not require any NNs to use.
 - physical_bottleneck.ipynb - The big one, where I test recently trained PBNN networks and evaluate them using their built-in "simulate" method
 - IntegrablePBNN.ipynb - Testing whether a PBNN subject to no physical hypotheses could predict $\partial_t \phi_i$ well enough to be integrated using a Fenics solver. Here $\partial_t \phi_i = NN(\phi_i)$
-- PBNNPipelineTest.ipynb - Testing breakdown of "sourced PBNNs" which have an additional source $S_i$. The training breaks when the PBNN needs to predict more parameters
-- Simulate_data.ipynb - The old notebook where I tried to simulate things using finite differences (instead of Fenics) and everything broke down
