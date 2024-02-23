@@ -11,15 +11,17 @@ import dolfin_adjoint as d_ad
 import pyadjoint as pyad
 
 from dolfin_problems import *
+import pygmsh
+import cv2
+import os
 
 dlf.set_log_level(40)
-
-
+    
 def smooth_with_fill(arr, sigma=3):
     msk = np.isnan(arr)
     mask = np.where(~msk)
 
-    interp = NearestNDInterpolator(np.transpose(mask), arr[mask])
+    interp = NearestNDInterpolator(np.transpose(mask), arr[~msk])
     arr = interp(*np.indices(arr.shape))
     arr = gaussian_filter(arr, sigma=sigma)
     arr[msk] = np.nan
@@ -63,10 +65,10 @@ class CensusDataset(torch.utils.data.Dataset):
         wb = np.stack([w_grid, b_grid], axis=1)
 
         if self.housing_method == 'constant':
-            print('Building dataset with constant housing in time')
+            print('Building dataset with constant housing in time', flush=True)
             self.housing = np.sum(wb, axis=1).max(axis=0)
         else: #Housing can vary in time
-            print('Building dataset with time-varying housing')
+            print('Building dataset with time-varying housing', flush=True)
             self.housing = np.sum(wb, axis=1, keepdims=True)
             
         wb /= self.housing
@@ -75,6 +77,7 @@ class CensusDataset(torch.utils.data.Dataset):
         self.wb = interp1d(self.t, wb, axis=0, fill_value='extrapolate')
         
         self.mesh = d_ad.Mesh(f'/home/jcolen/sociohydro/data/{self.county}_mesh.xml')
+        self.mesh_area = d_ad.assemble(1*ufl.dx(self.mesh))
     
     def get_time(self, t, dt=1):
         wb0 = self.wb(t)
@@ -107,112 +110,59 @@ class CensusDataset(torch.utils.data.Dataset):
                 
         return sample
 
-class StationaryDataset(CensusDataset):
-    def get_dolfin(self, sample):
-        '''
-        Generate reduced functional for calculating dJ/dD
-        Following github.com/schmittms/physical_bottleneck
-        '''
-        D_init = np.ones_like(self.x)
-        el = ufl.FiniteElement('CG', self.mesh.ufl_cell(), 1)
-        V  = dlf.FunctionSpace(self.mesh, el)    #W/B function space
-        VV = dlf.FunctionSpace(self.mesh, el*el)
-        
-        def forward(Dww, Dwb, Dbw, Dbb, GammaW, GammaB, dt, w0, b0, mesh):
-            '''Solve forward problem for given diffusion coefficients and Gamma terms'''
-            w, b = dlf.TrialFunctions(VV)
-            u, v = dlf.TestFunctions(VV)
-            
-            #dt(\phi_i) - grad(Dij grad(phi_j)) = 0
-            #Note that Danny's paper uses the opposite sign on Dij
-            #Stationary problem requires symmetric Dij
-            #To prevent Dij -> 0, we define diagonal components are positive and set DAA = 1 + DAA
-            Dpl = (Dwb + Dbw) / 2
-            a = w*u*ufl.dx + b*v*ufl.dx
-            a += dt * ufl.dot((1+Dww) * ufl.grad(w), ufl.grad(u)) * ufl.dx
-            a += dt * ufl.dot(Dpl * ufl.grad(b), ufl.grad(u)) * ufl.dx
-            a += dt * ufl.dot(Dpl * ufl.grad(w), ufl.grad(v)) * ufl.dx
-            a += dt * ufl.dot(Dbb * ufl.grad(b), ufl.grad(v)) * ufl.dx
-            
-            a -= dt * GammaW * ufl.dot((1 - w0 - b0) * w0 * ufl.grad(ufl.div(ufl.grad(w))), ufl.grad(u)) * ufl.dx
-            a -= dt * GammaB * ufl.dot((1 - w0 - b0) * b0 * ufl.grad(ufl.div(ufl.grad(b))), ufl.grad(v)) * ufl.dx
-            
-            L = w0*u*ufl.dx + b0*v*ufl.dx
-            
-            wb = d_ad.Function(VV)
-            d_ad.solve(a == L, wb)
-            return wb, a, L
-            
-        GammaW = d_ad.Constant(0., name='gammaW')
-        GammaB = d_ad.Constant(0., name='gammaB')
-        dt = d_ad.Constant(sample['dt'], name='dt')
-        
-        Dij_init = np.zeros([4, *self.x.shape])
-        Dij_init[0, sample['mask']] = 1
-        Dij_init[3, sample['mask']] = 1
+class YearlyDataset(CensusDataset):
+    '''
+    Yearly dataset pulls data from a different source
+    It also includes a hispanic population
+    '''
+    def __init__(self,
+                 county='Virginia_Fairfax',
+                 spatial_scale=1e3,
+                 sigma=4,
+                 housing_method='constant',
+                 get_dolfin=ThreeDemographicsDynamics):
+        self.sigma = sigma
+        super().__init__(county=county, 
+                         spatial_scale=spatial_scale,
+                         housing_method=housing_method,
+                         get_dolfin=get_dolfin)
+    
+    def init_data(self):
+        with h5py.File(f'/home/jcolen/sociohydro/yearly/processed/{self.county}.hdf5', 'r') as h5f:
+            w_grid = []
+            b_grid = []
+            h_grid = []
+            for key in h5f.keys():
+                d = h5f[key]
+                x_grid = d["x_grid"][:] / self.spatial_scale
+                y_grid = d["y_grid"][:] / self.spatial_scale
+                mask = d["mask"][:].astype(bool)
+                w_grid.append(smooth_with_fill(d["w_grid"], sigma=self.sigma))
+                b_grid.append(smooth_with_fill(d["b_grid"], sigma=self.sigma))
+                h_grid.append(smooth_with_fill(d["h_grid"], sigma=self.sigma))
 
-        Dww = scalar_img_to_mesh(Dij_init[0], self.x, self.y, V)
-        Dwb = scalar_img_to_mesh(Dij_init[1], self.x, self.y, V)
-        Dbw = scalar_img_to_mesh(Dij_init[2], self.x, self.y, V)
-        Dbb = scalar_img_to_mesh(Dij_init[3], self.x, self.y, V)
-        w0 = scalar_img_to_mesh(sample['wb0'][0], self.x, self.y, V)
-        b0 = scalar_img_to_mesh(sample['wb0'][1], self.x, self.y, V)
+        self.x = x_grid
+        self.y = y_grid
+        self.t = np.arange(2010, 2022, dtype=float)
         
-        wb, a, L = forward(Dww, Dwb, Dbw, Dbb, GammaW, GammaB, dt, w0, b0, self.mesh)
-        w, b = wb.split(True)
-        J = d_ad.assemble(ufl.dot(w - w0, w - w0) * ufl.dx + \
-                          ufl.dot(b - b0, b - b0) * ufl.dx)
-        
-        #Build controls to allow for updating values
-        control_Dww = d_ad.Control(Dww) 
-        control_Dwb = d_ad.Control(Dwb) 
-        control_Dbw = d_ad.Control(Dbw) 
-        control_Dbb = d_ad.Control(Dbb)
-        control_GammaW = d_ad.Control(GammaW)
-        control_GammaB = d_ad.Control(GammaB)
-        control_dt = d_ad.Control(dt)
-        control_w0 = d_ad.Control(w0)
-        control_b0 = d_ad.Control(b0)
-        
-        controls = [control_Dww, control_Dwb, control_Dbw, control_Dbb,
-                    control_GammaW, control_GammaB, control_dt, control_w0, control_b0]
-        Jhat_np = pyad.ReducedFunctionalNumPy(J, controls)
-        Jhat =    pyad.ReducedFunctional(J, controls)
-        
-        control_arr = [p.data() for p in Jhat_np.controls]
-        control_arr = Jhat_np.obj_to_array(control_arr)
-        
-        return {
-            'Jhat': Jhat_np,
-            'control_arr': control_arr,
-            'pde_forward': forward,
-            'FctSpace': V,
-            'base_RF': Jhat,
-            'J': J,
-            'Dij': torch.FloatTensor(Dij_init),
-        }
-    
-    
-    def get_time(self, t):
-        wb0 = self.wb(t)
-        
-        sample = {
-            't': t,
-            'x': self.x,
-            'y': self.y,
-            'mask': self.mask,
-            'dt': 1,
-            'wb0': self.wb(t),
-        }
-        pde = self.get_dolfin(sample)
-        return {**sample, **pde}
-    
-    def __getitem__(self, idx):
-        t0 = self.t[0] + idx
-        if self.train:
-            t0 += np.random.random()
+        #Convert population to occupation fraction
+        wb = np.stack([w_grid, b_grid, h_grid], axis=1)
+        print(wb.shape, flush=True)
+
+        if self.housing_method == 'constant':
+            print('Building dataset with constant housing in time', flush=True)
+            self.housing = np.sum(wb, axis=1).max(axis=0)
+        else: #Housing can vary in time
+            print('Building dataset with time-varying housing', flush=True)
+            self.housing = np.sum(wb, axis=1, keepdims=True)
             
-        sample = self.get_time(t0)
-        sample['wb0'] = torch.FloatTensor(sample['wb0'])
-                
-        return sample
+        wb /= self.housing
+        
+        #self.mask = np.all(~np.isnan(wb), axis=(0, 1))
+        self.mask = mask
+        self.wb = interp1d(self.t, wb, axis=0, fill_value='extrapolate')
+        
+        mesh_path = f'/home/jcolen/sociohydro/yearly/processed/{self.county}_mesh.xml'
+        
+        self.mesh = d_ad.Mesh(mesh_path)
+        self.mesh_area = d_ad.assemble(1*ufl.dx(self.mesh))
