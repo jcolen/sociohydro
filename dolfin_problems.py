@@ -174,6 +174,85 @@ class SociohydrodynamicsProblem:
                 self.controls[s] = Gammas.flatten()
             self.Gammas[0].value = self.controls[-2]
             self.Gammas[1].value = self.controls[-1]
+
+class TwoDemographicsDynamics:
+    '''
+    Generate reduced functional for calculating dJ/dD
+    Following github.com/schmittms/physical_bottleneck
+
+    Using dt_phi = S_i
+    '''    
+    def __init__(self, dataset, sample):
+        el = ufl.FiniteElement('CG', dataset.mesh.ufl_cell(), 1)
+        self.mesh_area = dataset.mesh_area
+        self.FctSpace = dlf.FunctionSpace(dataset.mesh, el)
+        self.VV = dlf.FunctionSpace(dataset.mesh, dlf.MixedElement([el,el]))
+       
+        self.Si =  [d_ad.Function(self.FctSpace) for i in range(2)]
+        for i in range(len(self.Si)):
+            self.Si[i].vector()[:]  = 0.
+        
+        args = (dataset.x, dataset.y, self.FctSpace)
+        self.dt = d_ad.Constant(sample['dt'], name='dt')
+        self.wb0 = [scalar_img_to_mesh(sample['wb0'][i], *args) for i in range(2)]
+        wb1 = [scalar_img_to_mesh(sample['wb1'][i], *args) for i in range(2)]
+
+        scale = 1. / dataset.mesh_area
+        
+        #print(f'Scale = {scale}')
+        
+        wb = self.forward()
+        w, b= wb.split(True)
+        J = scale * d_ad.assemble(
+            ufl.dot(w - wb1[0], w - wb1[0]) * ufl.dx + \
+            ufl.dot(b - wb1[1], b - wb1[1]) * ufl.dx)
+
+        #Build controls to allow for updating values
+        controls = [d_ad.Control(self.Si[i]) for i in range(2)]
+        self.Jhat = pyad.ReducedFunctionalNumPy(J, controls)
+
+        control_arr = [p.data() for p in self.Jhat.controls]
+        self.controls = self.Jhat.obj_to_array(control_arr)
+        
+    def residual(self):
+        return self.Jhat(self.controls)
+    
+    def grad(self, device):
+        dJdD = self.Jhat.derivative(self.controls, forget=True, project=False)
+        return {
+            'Si': torch.tensor(dJdD, device=device),
+        }
+    
+    def forward(self):
+        '''Solve forward problem for given diffusion coefficients and Gamma terms'''
+        w, b = dlf.TrialFunctions(self.VV)
+        u, v = dlf.TestFunctions(self.VV)
+        
+        Sw, Sb = self.Si
+        w0, b0 = self.wb0
+        dt = self.dt
+
+        #dt(\phi_i) - grad(Dij grad(phi_j)) = S_i
+        #Note that Danny's paper uses the opposite sign on Dij
+        a = w*u*ufl.dx + b*v*ufl.dx
+
+        L = w0*u*ufl.dx + b0*v*ufl.dx
+        L -= dt * Sw * u * ufl.dx
+        L -= dt * Sb * v * ufl.dx
+
+        wb = d_ad.Function(self.VV)
+        d_ad.solve(a == L, wb)
+        return wb
+    
+    def set_params(self, Si=None, **kwargs):
+        N = self.FctSpace.dim()
+        if Si is not None:
+            if not isinstance(Si, np.ndarray):
+                self.controls[:] = Si.detach().cpu().numpy().flatten()
+            else:
+                self.controls[:] = Si.flatten()
+            for i in range(2):
+                self.Si[i].vector()[:] = self.controls[i*N:(1+i)*N]            
             
 class ThreeDemographicsDynamics:
     '''

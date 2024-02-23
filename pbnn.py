@@ -7,79 +7,79 @@ from dolfin_problems import *
 
 import dolfin as dlf
 import dolfin_adjoint as d_ad
+import h5py
 from tqdm.auto import trange, tqdm
 
-'''
-Training scripts
-'''         
-def train(model, dataset, n_epochs, batch_size, device, savedir='dynamic'):
-    '''
-    Train a model
-    '''
-    opt = torch.optim.Adam(model.parameters(), lr=3e-4)
-    sch = torch.optim.lr_scheduler.ExponentialLR(opt, gamma=0.98)
-    train_loss = []
-    val_loss = []
-    step = 0
+def compute_saliency(model, dataset, device, savename='SourcedOnlyPBNN'):
+    def forward(model, wb0, FctSpace, xy):
+        #Neural network part
+        x = model.read_in(wb0)
+        for cell in model.cnn1:
+            x = x + cell(x)
+        latent = model.downsample(x)
+        for cell in model.cnn2:
+            latent = latent + cell(latent)
+        latent = F.interpolate(latent, x.shape[-2:])
+        x = torch.cat([x, latent], dim=1)
+        S = model.read_out(x).squeeze()
+        return {
+            'Si': S,
+        }
+    def aggregate_sample(model, sample):
+        sample['wb0'] = sample['wb0'].to(device)[None]
+        sample['wb0'][sample['wb0'].isnan()] = 0
+        sample['wb0'].requires_grad = True
+        params = forward(
+            model,
+            sample['wb0'],
+            sample['problem'].FctSpace,
+            (sample['x'], sample['y']))
+
+        nnz = np.asarray(np.nonzero(sample['mask'])).T
+        np.random.shuffle(nnz)
+        pts = nnz[:100]
+
+        G_S = []
+        for pt in pts:
+            loc = torch.zeros_like(params['Si'][0])
+            loc[pt[0], pt[1]] = 1.
+
+            grad = []
+            for j in range(params['Si'].shape[0]):
+                grad.append(torch.autograd.grad(params['Si'][j], sample['wb0'], grad_outputs=loc, retain_graph=True)[0])
+            grad = torch.stack(grad) #[3, 3, Y, X]
+            G_S.append(grad.detach().cpu().numpy().squeeze())
+
+        center = np.asarray([G_S[0].shape[-2]/2, G_S[0].shape[-1]/2]).astype(int)
+        shifts = np.asarray(center-pts)
+
+        G_S_shifted = np.asarray([np.roll(g, shift, axis=(-2,-1)) for shift, g in zip(shifts, G_S)])
+
+        return G_S_shifted
     
-    idxs = np.arange(len(dataset), dtype=int)
+    with h5py.File(f'{savename}_saliency.h5', 'a') as h5f:
+        ds = h5f.require_group(dataset.county)
 
-    
-    with tqdm(total=n_epochs) as pbar:
-        for epoch in range(n_epochs):
-            model.train()
-            for ds in dataset.datasets:
-                ds.training()
-            np.random.shuffle(idxs)
-            d_ad.set_working_tape(d_ad.Tape())
+        if 'X' in ds:
+            del ds['X']
+            del ds['Y']
+        if 'G_S' in ds:
+            del ds['G_S']
+        
+        ds.create_dataset('X', data=dataset.x) # REMEMBER TO SUBTRACT MEAN TO ALIGN
+        ds.create_dataset('Y', data=dataset.y)
 
-            with tqdm(total=len(dataset), leave=False) as ebar:
-                for i in range(len(dataset)):
-                    batch = dataset[idxs[i]]
-                    batch['wb0'] = batch['wb0'].to(device)
+        gs = ds.require_group('G_S')
+        for i in trange(len(dataset)):
+            sample = dataset[i]
+            G_S = aggregate_sample(model, sample)
+            gs.create_dataset(f'{int(sample["t"])}', data=G_S)
 
-                    params, J = model.training_step(batch)
-                    train_loss.append(J)
-                    step += 1
-                    ebar.update()
-
-                    if step % batch_size == 0:
-                        ebar.set_postfix(loss=np.mean(train_loss[-batch_size:]))
-
-                        opt.step()
-                        d_ad.set_working_tape(d_ad.Tape())
-                        opt.zero_grad()
-
-            model.eval()
-            for ds in dataset.datasets:
-                ds.validate()
-            val_loss.append(0)
-
-            with tqdm(total=len(dataset), leave=False) as ebar:
-                with torch.no_grad():
-                    for i in range(len(dataset)):
-                        d_ad.set_working_tape(d_ad.Tape())
-                        batch = dataset[i]
-                        batch['wb0'] = batch['wb0'].to(device)
-
-                        params, J = model.validation_step(batch)
-                        val_loss[epoch] += J
-                        ebar.update()
-
-
-            torch.save(
-                {
-                    'state_dict': model.state_dict(),
-                    'val_loss': val_loss,
-                    'train_loss': train_loss,
-                },
-                f'{savedir}/{model.__class__.__name__}.ckpt')
-
-            sch.step()
-            pbar.update()
-            pbar.set_postfix(val_loss=val_loss[-1])
-
-
+        ds.create_dataset(
+            'G_S_sum',
+            data=np.sum(np.asarray([gs[t] for t in gs.keys()]), axis=(0,1))
+        )
+            
 
 '''
 Building blocks
@@ -111,31 +111,29 @@ class ConvNextBlock(nn.Module):
 '''
 Neural network
 '''
-class PBNN(nn.Module):
-    '''
-    CNN computes local diffusion matrix from phi_W/B inputs
-    The restriction is that Gamma is positive and there is 
-        no further restriction on D_{ij}
-    '''
+class SourcedOnlyPBNN(nn.Module):
     def __init__(self,
+                 phi_dim=3,
                  kernel_size=7,
                  N_hidden=8,
                  hidden_size=64,
                  dropout_rate=0.1):
         super().__init__()
         
+        self.phi_dim = phi_dim
         self.kernel_size = kernel_size
         self.N_hidden = N_hidden
         self.hidden_size = hidden_size
-        
-        self.gammas = nn.Parameter(torch.zeros(2, dtype=torch.float), requires_grad=True)
-        
-        self.read_in = ConvNextBlock(2, hidden_size, kernel_size, dropout_rate)
+                
+        self.read_in = nn.Sequential(
+            nn.Conv2d(phi_dim, 4, kernel_size=1),
+            ConvNextBlock(4, hidden_size, kernel_size, dropout_rate)
+        )
         self.downsample = nn.Sequential(
             nn.Conv2d(hidden_size, hidden_size, kernel_size=4, stride=4),
             nn.GELU()
         )
-        self.read_out = nn.Conv2d(2*hidden_size, 6, kernel_size=1)
+        self.read_out = nn.Conv2d(2*hidden_size, phi_dim, kernel_size=1)
         
         self.cnn1 = nn.ModuleList()
         self.cnn2 = nn.ModuleList()
@@ -151,15 +149,12 @@ class PBNN(nn.Module):
         params = self.forward(sample['wb0'][None], 
                               problem.FctSpace, 
                               (sample['x'], sample['y']))
-        for key in params:
-            params[key] = params[key].flatten()
+        params['Si'] = params['Si'].flatten()
         problem.set_params(**params)
         loss = problem.residual()
         grad = problem.grad(sample['wb0'].device)
 
-        DS = torch.cat([params['Dij'], params['Si']])
-        DS.backward(gradient=grad['DS'] / sample['dt'])
-        params['Gammas'].backward(gradient=grad['Gammas'] / sample['dt'])
+        params['Si'].backward(gradient=grad['Si'] / sample['dt'])
         
         return params, loss
     
@@ -189,32 +184,19 @@ class PBNN(nn.Module):
             latent = latent + cell(latent)
         latent = F.interpolate(latent, x.shape[-2:])
         x = torch.cat([x, latent], dim=1)
-        DS = self.read_out(x).squeeze()
-        
-        #Separate data and postprocess
-        D = DS[:4]
-        S = DS[4:]
+        S = self.read_out(x).squeeze()
         
         if self.training:
-            Dij = self.blur(D)
             Si  = self.blur(S)
         else:
-            Dij = D
             Si = S
         
-        gammas = self.gammas.exp() #Gammas are positive
-
-        Dij_mesh = torch.zeros([Dij.shape[0], FctSpace.dim()], dtype=Dij.dtype, device=Dij.device)
         Si_mesh  = torch.zeros([Si.shape[0],  FctSpace.dim()], dtype=Si.dtype,  device=Si.device)
-        for i in range(Dij.shape[0]):
-            Dij_mesh[i] = scalar_img_to_mesh(Dij[i], *xy, FctSpace, vals_only=True)
         for i in range(Si.shape[0]):
             Si_mesh[i] = scalar_img_to_mesh(Si[i], *xy, FctSpace, vals_only=True)
         
         return {
-            'Dij': Dij_mesh, 
             'Si': Si_mesh, 
-            'Gammas': gammas,
         }
     
     def simulate(self, sample, mesh, tmax, dt=0.1):
@@ -228,12 +210,12 @@ class PBNN(nn.Module):
         mask = sample['mask']
         device = sample['wb0'].device
         
-        #Interpolate w0, b0 to grid
-        for i in range(2):
+        #Interpolate w0, b0, h0 to grid
+        for i in range(3):
             problem.wb0[i].assign(scalar_img_to_mesh(sample['wb0'][i], x_img, y_img, FctSpace))
 
         wb = torch.FloatTensor(np.stack([
-            mesh_to_scalar_img(problem.wb0[i], mesh, x_img, y_img, mask) for i in range(2)]))
+            mesh_to_scalar_img(problem.wb0[i], mesh, x_img, y_img, mask) for i in range(3)]))
         wb = wb.to(device)
         
         steps = int(np.round(tmax / dt))
@@ -245,128 +227,14 @@ class PBNN(nn.Module):
             
             #Solve variational problem and update w0, b0
             wb = problem.forward()
-            w, b = wb.split(True)
+            w, b, h = wb.split(True)
             problem.wb0[0].assign(w)
             problem.wb0[1].assign(b)
+            problem.wb0[2].assign(h)
             
             #Interpolate w0, b0 to grid
             wb = torch.FloatTensor(np.stack([
-                mesh_to_scalar_img(problem.wb0[i], mesh, x_img, y_img, mask) for i in range(2)]))
+                mesh_to_scalar_img(problem.wb0[i], mesh, x_img, y_img, mask) for i in range(3)]))
             wb = wb.to(device)
                                     
-        return problem.wb0[0], problem.wb0[1], wb
-        
-class DiagonalOnlyPBNN(PBNN):
-    '''
-    CNN computes local diffusion matrix from phi_W/B inputs
-    No off-diagonal components, no Gamma terms
-    Linear stability requires both diagonal diffusion coefficients are positive
-    '''
-    def forward(self, wb0, FctSpace, xy):
-        params = super().forward(wb0, FctSpace, xy)
-        params['Si'] *= 0 #Don't allow Si
-        params['Gammas'] = params['Gammas'] * 0 #Don't allow gamma
-        
-        D = params['Dij'].clone()
-        params['Dij'][1:3] *= 0
-        params['Dij'][0] = D[0].exp()
-        params['Dij'][3] = D[3].exp()
-        
-        return params
-    
-class SymmetricCrossDiffusionPBNN(PBNN):
-    '''
-    CNN computes local diffusion matrix from phi_W/B inputs
-    Allow symmetric off-diagonal components, no gamma terms
-    Linear stability requires both eigenvalues of diffusion matrix are positive
-        For a matrix Dij = A    P
-                           P    B
-        The constraint that both eigenvalues are positive reduces to:
-            A > 0
-            B > 0
-            P^2 < AB
-    
-    No Gamma terms
-    Note that including anti-symmetric off-diagonal components requires
-        the gamma terms for stability
-    '''
-    def forward(self, wb0, FctSpace, xy):
-        params = super().forward(wb0, FctSpace, xy)
-        params['Si'] *= 0 #Don't allow Si
-        params['Gammas'] = params['Gammas'] * 0 #Don't allow gamma
-        
-        D = params['Dij']
-        
-        Dij = torch.zeros_like(D)
-        Dij[0] += D[0].exp() #Positive D_A
-        Dij[3] += D[3].exp() #Positive D_B
-        sqAB = torch.sqrt(D[0].exp() * D[3].exp())
-        Dij[1] += D[2].tanh() * sqAB # |D_+| < sqrt(D_a D_b)
-        Dij[2] += D[2].tanh() * sqAB # |D_+| < sqrt(D_a D_b)
-        params['Dij'] = Dij
-        
-        return params
-    
-class CrossDiffusionPBNN(PBNN):
-    '''
-    CNN computes local diffusion matrix from phi_W/B inputs
-    Allow symmetric off-diagonal components, no gamma terms
-    Linear stability requires both eigenvalues of diffusion matrix are positive
-        For a matrix Dij = A   B
-                           C   D
-        The constraint that both eigenvalues are positive reduces to:
-            A > 0, D > 0,  C = 0 || b in [ad/c, -(a-d)^2/4c] OR
-            A < 0, D > -A, b in [ad/c, -(a-d)^2/4c] OR
-            A > -D, D < 0, b in [ad/c, -(a-d)^2/4c]
-        Note that in the limit b == c, the constraint on b reduces to
-            b^2 in [ad, -(a-d)^2] -> b^2 < ad
-            
-        The common general constraints are A > -D, B in [AD/C, -(A-D)^2/4C]
-        
-    To enforce linear stability, we have the following pipeline:
-        D can be anything
-        A can be anything from -D to +infinity
-        
-    
-    No Gamma terms
-    '''
-    def forward(self, wb0, FctSpace=None, xy=None):
-        params = super().forward(wb0, FctSpace, xy)
-        params['Si'] *= 0 #Don't allow Si
-        params['Gammas'] = params['Gammas'] * 0 #Don't allow gamma
-        return params
-    
-'''
-Models for testing "model-free" type predictions
-'''
-
-class SourcedOnlyPBNN(PBNN):
-    def forward(self, wb0, FctSpace=None, xy=None):
-        params = super().forward(wb0, FctSpace, xy)
-        params['Gammas'] = params['Gammas'] * 0 #Don't allow gamma
-        params['Dij'] = params['Dij'] * 0 #Don't allow Dij
-        return params 
-    
-class SourcedDiffusionPBNN(PBNN):
-    def forward(self, wb0, FctSpace=None, xy=None):
-        params = super().forward(wb0, FctSpace, xy)
-        params['Gammas'] = params['Gammas'] * 0 #Don't allow gamma
-        return params  
-    
-class SourcedSymmetricPBNN(PBNN):
-    def forward(self, wb0, FctSpace, xy):
-        params = super().forward(wb0, FctSpace, xy)
-        params['Gammas'] = params['Gammas'] * 0 #Don't allow gamma
-        
-        D = params['Dij']
-        
-        Dij = torch.zeros_like(D)
-        Dij[0] += D[0].exp() #Positive D_A
-        Dij[3] += D[3].exp() #Positive D_B
-        sqAB = torch.sqrt(D[0].exp() * D[3].exp())
-        Dij[1] += D[2].tanh() * sqAB # |D_+| < sqrt(D_a D_b)
-        Dij[2] += D[2].tanh() * sqAB # |D_+| < sqrt(D_a D_b)
-        params['Dij'] = Dij
-        
-        return params
- 
+        return problem.wb0[0], problem.wb0[1], problem.wb0[2], wb

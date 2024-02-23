@@ -7,16 +7,78 @@ from tqdm.auto import tqdm
 from argparse import ArgumentParser
 
 from data_processing import *
-from yearly_pbnn import *
+from pbnn import *
+
+'''
+Training scripts
+'''         
+def train(model, train_dataset, val_dataset, n_epochs, batch_size, device, savename='SourcedOnlyPBNN'):
+    '''
+    Train a model
+    '''
+    opt = torch.optim.Adam(model.parameters(), lr=3e-4)
+    sch = torch.optim.lr_scheduler.ExponentialLR(opt, gamma=0.98)
+    train_loss = []
+    val_loss = []
+    step = 0
+    
+    idxs = np.arange(len(train_dataset), dtype=int)
+
+    
+    with tqdm(total=n_epochs) as pbar:
+        for epoch in range(n_epochs):
+            np.random.shuffle(idxs)
+            d_ad.set_working_tape(d_ad.Tape())
+
+            with tqdm(total=len(train_dataset), leave=False) as ebar:
+                for i in range(len(train_dataset)):
+                    batch = train_dataset[idxs[i]]
+                    batch['wb0'] = batch['wb0'].to(device)
+
+                    params, J = model.training_step(batch)
+                    train_loss.append(J)
+                    step += 1
+                    ebar.update()
+
+                    if step % batch_size == 0:
+                        ebar.set_postfix(loss=np.mean(train_loss[-batch_size:]))
+
+                        opt.step()
+                        d_ad.set_working_tape(d_ad.Tape())
+                        opt.zero_grad()
+
+            val_loss.append(0)
+
+            with tqdm(total=len(val_dataset), leave=False) as ebar:
+                with torch.no_grad():
+                    for i in range(len(val_dataset)):
+                        d_ad.set_working_tape(d_ad.Tape())
+                        batch = val_dataset[i]
+                        batch['wb0'] = batch['wb0'].to(device)
+
+                        params, J = model.validation_step(batch)
+                        val_loss[epoch] += J
+                        ebar.update()
+
+
+            torch.save(
+                {
+                    'state_dict': model.state_dict(),
+                    'val_loss': val_loss,
+                    'train_loss': train_loss,
+                },
+                f'{savename}.ckpt')
+
+            sch.step()
+            pbar.update()
+            pbar.set_postfix(val_loss=val_loss[-1])
 
 if __name__ == '__main__':
     parser = ArgumentParser()
-    parser.add_argument('--n_epochs', type=int, default=250)
-    parser.add_argument('--pretrain_epochs', type=int, default=100)
+    parser.add_argument('--n_epochs', type=int, default=200)
     parser.add_argument('--batch_size', type=int, default=8)
     parser.add_argument('--modeltype', type=str, default='SourcedOnlyPBNN')
-    parser.add_argument('--load_model', type=str, default=None)
-    parser.add_argument('--savename', type=str, default='./yearly/SourcedOnlyPBNN')
+    parser.add_argument('--savename', type=str, default='./validation/yearly/SourcedOnlyPBNN_1')
     parser.add_argument('--housing_method', type=str, default='constant')
     args = parser.parse_args()
     
@@ -53,10 +115,6 @@ if __name__ == '__main__':
         
     device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
     model = eval(args.modeltype)().to(device)
-    
-    if args.load_model:
-        info = torch.load(args.load_model, map_location='cpu')
-        model.load_state_dict(info['state_dict'])
     
     with torch.autograd.set_detect_anomaly(True):
         train(model, train_dataset, val_dataset, 
