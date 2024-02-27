@@ -1,8 +1,9 @@
+import torch
 import numpy as np
 import os
 import glob
-import torch
 import json
+import pandas as pd
 from tqdm.auto import tqdm
 from argparse import ArgumentParser
 
@@ -12,7 +13,8 @@ from pbnn import *
 '''
 Training scripts
 '''         
-def train(model, train_dataset, val_dataset, n_epochs, batch_size, device, savename='SourcedOnlyPBNN'):
+def train(model, train_dataset, val_dataset, n_epochs, batch_size, device, 
+          savename='models/simulation/SimulationPBNN'):
     '''
     Train a model
     '''
@@ -33,7 +35,7 @@ def train(model, train_dataset, val_dataset, n_epochs, batch_size, device, saven
             with tqdm(total=len(train_dataset), leave=False) as ebar:
                 for i in range(len(train_dataset)):
                     batch = train_dataset[idxs[i]]
-                    batch['wb0'] = batch['wb0'].to(device)
+                    batch['ab0'] = batch['ab0'].to(device)
 
                     params, J = model.training_step(batch)
                     train_loss.append(J)
@@ -54,7 +56,7 @@ def train(model, train_dataset, val_dataset, n_epochs, batch_size, device, saven
                     for i in range(len(val_dataset)):
                         d_ad.set_working_tape(d_ad.Tape())
                         batch = val_dataset[i]
-                        batch['wb0'] = batch['wb0'].to(device)
+                        batch['ab0'] = batch['ab0'].to(device)
 
                         params, J = model.validation_step(batch)
                         val_loss[epoch] += J
@@ -77,49 +79,42 @@ if __name__ == '__main__':
     parser = ArgumentParser()
     parser.add_argument('--n_epochs', type=int, default=200)
     parser.add_argument('--batch_size', type=int, default=8)
-    parser.add_argument('--modeltype', type=str, default='YearlyPBNN')
-    parser.add_argument('--savename', type=str, default='./validation/yearly/YearlyPBNN_1')
-    parser.add_argument('--housing_method', type=str, default='constant')
+    parser.add_argument('--savename', type=str, default='./models/simulation/SimulationPBNN')
     args = parser.parse_args()
     
-    counties = [os.path.basename(c)[:-9] for c in glob.glob(
-        '/home/jcolen/data/sociohydro/yearly/processed/*_mesh.xml')]
-    N = len(counties)
-    Nc = len(counties) * 3 // 5
-    train_counties = list(np.random.choice(counties, Nc))
-    val_counties = [c for c in counties if not c in train_counties]
-    print('Training on ', train_counties, flush=True)
-    print('Validating on ', val_counties, flush=True)
-    args.__dict__['train_county'] = train_counties
-    args.__dict__['val_county'] = val_counties
+    info = pd.read_csv('/home/jcolen/data/sociohydro/2024-02-05_MCPhaseDiagram/data/dynamic_keys.csv')
+    folders = info.loc[info.dynamic_type == 'segregated', '#file'].values
+    folders = folders[0:1]
+
+    N = len(folders)
+    Nc = len(folders) * 3 // 5
+    train_folders = list(np.random.choice(folders, Nc))
+    val_folders = [c for c in folders if not c in train_folders]
+    train_folders = list(folders)
+    val_folders = list(folders)
+    print('Training on ', train_folders, flush=True)
+    print('Validating on ', val_folders, flush=True)
+    args.__dict__['train_folder'] = train_folders
+    args.__dict__['val_folder'] = val_folders
 
     with open(f'{args.savename}_args.txt', 'w') as f:
         json.dump(args.__dict__, f, indent=2)
 
     train_datasets = []
-    for county in args.train_county:
-        if county == 'California_San Bernardino':
-            print('Skipping San Bernardino in Training dataset')
-            continue
-        train_datasets.append(YearlyDataset(county, housing_method=args.housing_method))
+    for folder in args.train_folder:
+        train_datasets.append(SimulationDataset(folder))
         train_datasets[-1].training()
     train_dataset = torch.utils.data.ConcatDataset(train_datasets)
         
     val_datasets = []
-    for county in args.val_county:
-        if county == 'California_San Bernardino':
-            print('Skipping San Bernardino in Validation dataset')
-            continue
-        val_datasets.append(YearlyDataset(county, housing_method=args.housing_method))
+    for folder in args.val_folder:
+        val_datasets.append(SimulationDataset(folder))
         val_datasets[-1].validate()
     val_dataset = torch.utils.data.ConcatDataset(val_datasets)
         
     device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
-    model = eval(args.modeltype)().to(device)
+    model = SimulationPBNN().to(device)
     
     with torch.autograd.set_detect_anomaly(True):
         train(model, train_dataset, val_dataset, 
               args.n_epochs, args.batch_size, device, args.savename)
-        
-        for dataset in val_dataset.datasets:
-            compute_saliency(model, dataset, device, args.savename)
