@@ -15,6 +15,7 @@ def mesh_to_scalar(f, mesh):
 
 def scalar_to_mesh(f, FctSpace, vals_only=False):    
     d2v = dlf.dof_to_vertex_map(FctSpace).astype(np.int64)
+    d2v = d2v[:-1] #Periodic BCs
 
     if not isinstance(f, np.ndarray):
         d2v = torch.tensor(d2v, dtype=torch.long, device=f.device)
@@ -30,6 +31,13 @@ def scalar_to_mesh(f, FctSpace, vals_only=False):
         else:
             meshfct.vector()[:] = fct_vals
         return meshfct
+
+class PeriodicBoundary(dlf.SubDomain):
+    def inside(self, x, on_boundary):
+        return bool(x[0] < dlf.DOLFIN_EPS and x[0] > -dlf.DOLFIN_EPS and on_boundary)
+    
+    def map(self, x, y):
+        y[0] = x[0] - 1.0
     
 class SimulationProblem:
     '''
@@ -38,8 +46,9 @@ class SimulationProblem:
     '''    
     def __init__(self, dataset, sample):
         el = ufl.FiniteElement('CG', dataset.mesh.ufl_cell(), 1)
-        self.FctSpace = dlf.FunctionSpace(dataset.mesh, el)
-        self.VV = dlf.FunctionSpace(dataset.mesh, el*el)
+        pbc = PeriodicBoundary()
+        self.FctSpace = dlf.FunctionSpace(dataset.mesh, el, constrained_domain=pbc)
+        self.VV = dlf.FunctionSpace(dataset.mesh, el*el, constrained_domain=pbc)
        
         self.Si =  [d_ad.Function(self.FctSpace) for i in range(2)]
         for i in range(len(self.Si)):

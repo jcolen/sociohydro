@@ -65,10 +65,10 @@ class SimulationDataset(torch.utils.data.Dataset):
         return len(self.t)
     
     def __getitem__(self, idx):
-        t0 = self.t[0] + idx
+        t0 = self.t[idx]
         dt = self.dt * 1.0
         if self.train:
-            t0 += np.random.random()
+            t0 += np.random.random() * self.dt
             dt *= np.random.random()
             
         sample = self.get_time(t0, dt)

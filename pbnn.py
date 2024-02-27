@@ -138,18 +138,17 @@ class SimulationPBNN(nn.Module):
         for tt in trange(steps):
             #Run PBNN to get Dij, constants and assign to variational parameters
             params = self.forward(ab[None], FctSpace)
-            params['Si'] *= 1
             problem.set_params(**params)
             
             #Solve variational problem and update w0, b0
             ab = problem.forward()
-            w, b = ab.split(True)
-            problem.ab0[0].assign(w)
+            a, b = ab.split(True)
+            problem.ab0[0].assign(a)
             problem.ab0[1].assign(b)
             
             #Interpolate w0, b0 to grid
             ab = torch.FloatTensor(np.stack([
-                mesh_to_scalar_img(problem.ab0[i], mesh, x_img, y_img, mask) for i in range(self.input_dim)]))
+                mesh_to_scalar(problem.ab0[i], mesh) for i in range(self.input_dim)]))
             ab = ab.to(device)
                                     
         return problem.ab0[0], problem.ab0[1], ab

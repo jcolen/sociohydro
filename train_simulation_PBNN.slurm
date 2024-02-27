@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-#SBATCH --job-name=yearly_PBNN
+#SBATCH --job-name=simulation_PBNN
 #SBATCH --output=/home/jcolen/scratch/%x_%A_%a.out
 #SBATCH --partition=gpu
 #SBATCH --gres=gpu:1
