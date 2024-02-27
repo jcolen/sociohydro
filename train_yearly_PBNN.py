@@ -77,12 +77,13 @@ if __name__ == '__main__':
     parser = ArgumentParser()
     parser.add_argument('--n_epochs', type=int, default=200)
     parser.add_argument('--batch_size', type=int, default=8)
-    parser.add_argument('--modeltype', type=str, default='SourcedOnlyPBNN')
-    parser.add_argument('--savename', type=str, default='./validation/yearly/SourcedOnlyPBNN_1')
+    parser.add_argument('--modeltype', type=str, default='YearlyPBNN')
+    parser.add_argument('--savename', type=str, default='./validation/yearly/YearlyPBNN_1')
     parser.add_argument('--housing_method', type=str, default='constant')
     args = parser.parse_args()
     
-    counties = [os.path.basename(c)[:-9] for c in glob.glob('yearly/processed/*_mesh.xml')]
+    counties = [os.path.basename(c)[:-9] for c in glob.glob(
+        '/home/jcolen/data/sociohydro/yearly/processed/*_mesh.xml')]
     N = len(counties)
     Nc = len(counties) * 3 // 5
     train_counties = list(np.random.choice(counties, Nc))

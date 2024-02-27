@@ -1,30 +1,28 @@
 #!/bin/bash
 #
-#SBATCH --job-name=pipeline_PBNN
-#SBATCH --output=/scratch/midway3/jcolen/sbatch_outputs/%x_%A.out
-#SBATCH --error=/scratch/midway3/jcolen/sbatch_outputs/%x_%A.out
+#SBATCH --job-name=decennial_PBNN
+#SBATCH --output=/home/jcolen/scratch/%x_%A.out
 #SBATCH --partition=gpu
 #SBATCH --gres=gpu:1
-#SBATCH --account=pi-vitelli
-#SBATCH --exclude=midway3-0294
-#SBATCH --ntasks=1
+#SBATCH --ntasks=2
 #SBATCH --mem=4G
 
-source /home/jcolen/.bashrc
-module load python
-conda activate /project/vitelli/ml_venv
-
-cd /home/jcolen/sociohydro/physical_bottleneck
 
 housing="constant"
 county="cook_IL fulton_GA harris_TX la_CA"
-model="SourcedOnlyPBNN"
+model="DecennialPBNN"
 
 echo "STARTING" $housing $county $model
 
-python train_PBNN.py \
---modeltype ${model} \
---county ${county} \
---housing ${housing} \
---n_epochs 200 \
---savename validation/decennial/SourcedOnlyPBNN
+cd /home/jcolen/sociohydro/
+module load container_env pytorch-gpu/2.1.0
+
+# Check python
+crun -p /home/jcolen/envs/sociohydro python -c "print('Hello world')"
+
+crun -p /home/jcolen/envs/sociohydro python train_decennial_PBNN.py \
+    --modeltype ${model} \
+    --county ${county} \
+    --housing ${housing} \
+    --n_epochs 200 \
+    --savename validation/decennial/DecennialPBNN

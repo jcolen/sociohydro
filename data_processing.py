@@ -48,7 +48,7 @@ class CensusDataset(torch.utils.data.Dataset):
         self.train = False
     
     def init_data(self):
-        with h5py.File(f'/home/jcolen/sociohydro/decennial/{self.county}.hdf5', 'r') as d:
+        with h5py.File(f'/home/jcolen/data/sociohydro/decennial/{self.county}.hdf5', 'r') as d:
             x_grid = d["x_grid"][:] / self.spatial_scale
             y_grid = d["y_grid"][:] / self.spatial_scale
             w_grid = d["w_grid_array_masked"][:].transpose(2, 0, 1)
@@ -76,7 +76,7 @@ class CensusDataset(torch.utils.data.Dataset):
         self.mask = np.all(~np.isnan(wb), axis=(0, 1))
         self.wb = interp1d(self.t, wb, axis=0, fill_value='extrapolate')
         
-        self.mesh = d_ad.Mesh(f'/home/jcolen/sociohydro/decennial/{self.county}_mesh.xml')
+        self.mesh = d_ad.Mesh(f'/home/jcolen/data/sociohydro/decennial/{self.county}_mesh.xml')
         self.mesh_area = d_ad.assemble(1*ufl.dx(self.mesh))
     
     def get_time(self, t, dt=1):
@@ -128,7 +128,7 @@ class YearlyDataset(CensusDataset):
                          get_dolfin=get_dolfin)
     
     def init_data(self):
-        with h5py.File(f'/home/jcolen/sociohydro/yearly/processed/{self.county}.hdf5', 'r') as h5f:
+        with h5py.File(f'/home/jcolen/data/sociohydro/yearly/processed/{self.county}.hdf5', 'r') as h5f:
             w_grid = []
             b_grid = []
             h_grid = []
@@ -162,7 +162,7 @@ class YearlyDataset(CensusDataset):
         self.mask = mask
         self.wb = interp1d(self.t, wb, axis=0, fill_value='extrapolate')
         
-        mesh_path = f'/home/jcolen/sociohydro/yearly/processed/{self.county}_mesh.xml'
+        mesh_path = f'/home/jcolen/data/sociohydro/yearly/processed/{self.county}_mesh.xml'
         
         self.mesh = d_ad.Mesh(mesh_path)
         self.mesh_area = d_ad.assemble(1*ufl.dx(self.mesh))

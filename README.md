@@ -6,7 +6,8 @@ Dynamics are implemented using Fenics/Dolfin and the neural network is trained u
 This can be run inside the Anaconda environment in `/project/vitelli/ml_venv`
 
 The notebooks contained in this repo are:
-- PBNN.ipynb - The big one, where I test recently trained PBNN networks and evaluate them using their built-in "simulate" method, and also compute their saliency maps
+- DecennialPBNN.ipynb - The big one, where I test recently trained PBNN networks and evaluate them using their built-in "simulate" method, and also compute their saliency maps
+- DecennialSaliency.ipynb - Evaluating saliency plots for the Decennial PBNN data
 - YearlyPBNN.ipynb - Same as PBNN.ipynb but evaluating on yearly data
 - YearlySaliency.ipynb - Evaluating saliency plots for the Yearly PBNN data
 - MakeDilatedMeshes.ipynb - mesh making for the yearly saliency models

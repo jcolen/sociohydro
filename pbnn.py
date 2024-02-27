@@ -111,29 +111,35 @@ class ConvNextBlock(nn.Module):
 '''
 Neural network
 '''
-class SourcedOnlyPBNN(nn.Module):
+class DecennialPBNN(nn.Module):
     def __init__(self,
-                 phi_dim=3,
+                 input_dim=2,
+                 output_dim=2, #Reflecting an older version with more flexibility
                  kernel_size=7,
                  N_hidden=8,
                  hidden_size=64,
                  dropout_rate=0.1):
         super().__init__()
         
-        self.phi_dim = phi_dim
+        self.input_dim = input_dim
+        self.output_dim = output_dim
         self.kernel_size = kernel_size
         self.N_hidden = N_hidden
         self.hidden_size = hidden_size
-                
-        self.read_in = nn.Sequential(
-            nn.Conv2d(phi_dim, 4, kernel_size=1),
-            ConvNextBlock(4, hidden_size, kernel_size, dropout_rate)
-        )
+    
+        if hidden_size % input_dim != 0:
+            self.read_in = nn.Sequential(
+                nn.Conv2d(input_dim, 4, kernel_size=1),
+                ConvNextBlock(4, hidden_size, kernel_size, dropout_rate)
+            )
+        else:
+            self.read_in = ConvNextBlock(input_dim, hidden_size, kernel_size, dropout_rate)
+
         self.downsample = nn.Sequential(
             nn.Conv2d(hidden_size, hidden_size, kernel_size=4, stride=4),
             nn.GELU()
         )
-        self.read_out = nn.Conv2d(2*hidden_size, phi_dim, kernel_size=1)
+        self.read_out = nn.Conv2d(2*hidden_size, output_dim, kernel_size=1)
         
         self.cnn1 = nn.ModuleList()
         self.cnn2 = nn.ModuleList()
@@ -184,7 +190,7 @@ class SourcedOnlyPBNN(nn.Module):
             latent = latent + cell(latent)
         latent = F.interpolate(latent, x.shape[-2:])
         x = torch.cat([x, latent], dim=1)
-        S = self.read_out(x).squeeze()
+        S = self.read_out(x).squeeze()[-self.output_dim:]
         
         if self.training:
             Si  = self.blur(S)
@@ -211,7 +217,62 @@ class SourcedOnlyPBNN(nn.Module):
         device = sample['wb0'].device
         
         #Interpolate w0, b0, h0 to grid
-        for i in range(3):
+        for i in range(self.input_dim):
+            problem.wb0[i].assign(scalar_img_to_mesh(sample['wb0'][i], x_img, y_img, FctSpace))
+
+        wb = torch.FloatTensor(np.stack([
+            mesh_to_scalar_img(problem.wb0[i], mesh, x_img, y_img, mask) for i in range(self.input_dim)]))
+        wb = wb.to(device)
+        
+        steps = int(np.round(tmax / dt))
+        for tt in trange(steps):
+            #Run PBNN to get Dij, constants and assign to variational parameters
+            params = self.forward(wb[None], FctSpace, (x_img, y_img))
+            params['Si'] *= 1
+            problem.set_params(**params)
+            
+            #Solve variational problem and update w0, b0
+            wb = problem.forward()
+            w, b = wb.split(True)
+            problem.wb0[0].assign(w)
+            problem.wb0[1].assign(b)
+            
+            #Interpolate w0, b0 to grid
+            wb = torch.FloatTensor(np.stack([
+                mesh_to_scalar_img(problem.wb0[i], mesh, x_img, y_img, mask) for i in range(self.input_dim)]))
+            wb = wb.to(device)
+                                    
+        return problem.wb0[0], problem.wb0[1], wb
+
+class YearlyPBNN(DecennialPBNN):
+    def __init__(self,
+                input_dim=3,
+                output_dim=3,
+                kernel_size=7,
+                N_hidden=8,
+                hidden_size=64,
+                dropout_rate=0.1):
+        super().__init__(input_dim, output_dim, kernel_size, N_hidden, hidden_size, dropout_rate)
+
+        # Three is not divisible by 64 so add channel adjuster for grouped convolutions
+        self.read_in = nn.Sequential(
+            nn.Conv2d(input_dim, 4, kernel_size=1),
+            ConvNextBlock(4, hidden_size, kernel_size, dropout_rate)
+        )
+
+    def simulate(self, sample, mesh, tmax, dt=0.1):
+        problem = sample['problem']
+        problem.dt.assign(d_ad.Constant(dt))
+        FctSpace = problem.FctSpace
+        
+        Dt = d_ad.Constant(dt)
+        x_img = sample['x']
+        y_img = sample['y']
+        mask = sample['mask']
+        device = sample['wb0'].device
+        
+        #Interpolate w0, b0, h0 to grid
+        for i in range(self.input_dim):
             problem.wb0[i].assign(scalar_img_to_mesh(sample['wb0'][i], x_img, y_img, FctSpace))
 
         wb = torch.FloatTensor(np.stack([

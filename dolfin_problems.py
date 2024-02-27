@@ -4,6 +4,7 @@ import ufl
 import dolfin as dlf
 import dolfin_adjoint as d_ad
 import pyadjoint as pyad
+from pyadjoint.reduced_functional_numpy import ReducedFunctionalNumPy
 
 from scipy.interpolate import griddata
 
@@ -99,7 +100,7 @@ class SociohydrodynamicsProblem:
         control_Gammas = [d_ad.Control(self.Gammas[i]) for i in range(2)]
 
         controls = [*control_Dij, *control_Si, *control_Gammas]
-        self.Jhat = pyad.ReducedFunctionalNumPy(J, controls)
+        self.Jhat = ReducedFunctionalNumPy(J, controls)
 
         control_arr = [p.data() for p in self.Jhat.controls]
         self.controls = self.Jhat.obj_to_array(control_arr)
@@ -209,7 +210,7 @@ class TwoDemographicsDynamics:
 
         #Build controls to allow for updating values
         controls = [d_ad.Control(self.Si[i]) for i in range(2)]
-        self.Jhat = pyad.ReducedFunctionalNumPy(J, controls)
+        self.Jhat = ReducedFunctionalNumPy(J, controls)
 
         control_arr = [p.data() for p in self.Jhat.controls]
         self.controls = self.Jhat.obj_to_array(control_arr)
@@ -289,7 +290,7 @@ class ThreeDemographicsDynamics:
 
         #Build controls to allow for updating values
         controls = [d_ad.Control(self.Si[i]) for i in range(3)]
-        self.Jhat = pyad.ReducedFunctionalNumPy(J, controls)
+        self.Jhat = ReducedFunctionalNumPy(J, controls)
 
         control_arr = [p.data() for p in self.Jhat.controls]
         self.controls = self.Jhat.obj_to_array(control_arr)

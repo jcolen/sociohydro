@@ -78,8 +78,8 @@ if __name__ == '__main__':
     parser.add_argument('--county', nargs='+', default=['cook_IL', 'fulton_GA', 'harris_TX', 'la_CA'])
     parser.add_argument('--n_epochs', type=int, default=200)
     parser.add_argument('--batch_size', type=int, default=8)
-    parser.add_argument('--modeltype', type=str, default='SourcedOnlyPBNN')
-    parser.add_argument('--savename', type=str, default='./validation/decennial/SourcedOnlyPBNN')
+    parser.add_argument('--modeltype', type=str, default='DecennialPBNN')
+    parser.add_argument('--savename', type=str, default='./validation/decennial/DecennialPBNN')
     parser.add_argument('--housing_method', type=str, default='constant')
     args = parser.parse_args()
 
@@ -92,10 +92,10 @@ if __name__ == '__main__':
     dataset = torch.utils.data.ConcatDataset(datasets)
         
     device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
-    model = eval(args.modeltype)(phi_dim=2).to(device)
+    model = eval(args.modeltype)().to(device)
     
     with torch.autograd.set_detect_anomaly(True):
-        #train(model, dataset, args.n_epochs, args.batch_size, device, args.savename)
+        train(model, dataset, args.n_epochs, args.batch_size, device, args.savename)
         
         for ds in dataset.datasets:
             compute_saliency(model, ds, device, args.savename)

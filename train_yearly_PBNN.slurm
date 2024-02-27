@@ -1,31 +1,27 @@
 #!/bin/bash
 #
-#SBATCH --job-name=pipeline_PBNN
-#SBATCH --output=/scratch/midway3/jcolen/sbatch_outputs/%x_%A_%a.out
-#SBATCH --error=/scratch/midway3/jcolen/sbatch_outputs/%x_%A_%a.out
+#SBATCH --job-name=yearly_PBNN
+#SBATCH --output=/home/jcolen/scratch/%x_%A_%a.out
 #SBATCH --partition=gpu
 #SBATCH --gres=gpu:1
 #SBATCH --array=1-3
-#SBATCH --account=pi-vitelli
-#SBATCH --exclude=midway3-0294,midway3-[0277-0281]
-#SBATCH --ntasks=1
+#SBATCH --ntasks=2
 #SBATCH --mem=24G
 
-source /home/jcolen/.bashrc
-module load python
-conda activate /project/vitelli/ml_venv
-
 cd /home/jcolen/sociohydro
+module load container_env pytorch-gpu/2.1.0
+
+# Check python
+crun -p /home/jcolen/envs/sociohydro python -c "print('Hello world')"
 
 housing="constant"
-model="SourcedOnlyPBNN"
-i=1
+model="YearlyPBNN"
 
 echo "STARTING" $housing $model ${SLURM_ARRAY_TASK_ID}
 
-python train_yearly_PBNN.py \
+crun -p /home/jcolen/envs/sociohydro python train_yearly_PBNN.py \
     --modeltype ${model} \
     --housing ${housing} \
     --n_epochs 200 \
-    --savename validation/yearly/SourcedOnlyPBNN_${SLURM_ARRAY_TASK_ID}
+    --savename validation/yearly/YearlyPBNN_${SLURM_ARRAY_TASK_ID}
 
