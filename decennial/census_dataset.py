@@ -18,12 +18,13 @@ class CensusDataset(torch.utils.data.Dataset):
                  data_dir='/home/jcolen/data/sociohydro/decennial/revision/',
                  spatial_scale=1e3,
                  sigma=3,
-                 get_dolfin=TwoDemographicsDynamics,
+                 dolfin_kwargs={},
                 ):
         self.county = county
         self.data_dir = data_dir
         self.spatial_scale = spatial_scale
         self.sigma = sigma
+        self.dolfin_kwargs = {}
         self.init_data()
 
         self.train = True
@@ -100,7 +101,7 @@ class CensusDataset(torch.utils.data.Dataset):
             'wb0': self.wb(t0),
             'wb1': self.wb(t0+dt),
         }
-        sample['problem'] = TwoDemographicsDynamics(self, sample)
+        sample['problem'] = TwoDemographicsDynamics(self, sample, **self.dolfin_kwargs)
         sample['wb0'] = torch.FloatTensor(sample['wb0'])
 
         return sample

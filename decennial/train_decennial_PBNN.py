@@ -27,6 +27,13 @@ def train(model, dataset, n_epochs, batch_size, device, savename):
                 ds.training()
             np.random.shuffle(idxs)
             d_ad.set_working_tape(d_ad.Tape())
+            model.train()
+
+            # Schedule increase in loss weight of segregation
+            if epoch == 50:
+                print('Setting Dolfin alpha to 0.1')
+                for ds in dataset.datasets:
+                    ds.dolfin_kwargs = {'alpha': 0.1}
 
             with tqdm(total=len(dataset), leave=False) as ebar:
                 for i in range(len(dataset)):
@@ -48,6 +55,7 @@ def train(model, dataset, n_epochs, batch_size, device, savename):
             for ds in dataset.datasets:
                 ds.validate()
             val_loss.append(0)
+            model.eval()
 
             with tqdm(total=len(dataset), leave=False) as ebar:
                 with torch.no_grad():

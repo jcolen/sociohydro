@@ -64,7 +64,8 @@ class TwoDemographicsDynamics:
 
     Using dt_phi = S_i
     '''    
-    def __init__(self, dataset, sample):
+    def __init__(self, dataset, sample, alpha=0):
+        self.alpha = alpha
         el = ufl.FiniteElement('CG', dataset.mesh.ufl_cell(), 1)
         self.mesh_area = dataset.mesh_area
         self.FctSpace = dlf.FunctionSpace(dataset.mesh, el)
@@ -89,9 +90,19 @@ class TwoDemographicsDynamics:
         # Build the loss functional as the mean squared error between prediction and self.wb1
         wb = self.forward()
         w, b = wb.split(True)
-        J = scale * d_ad.assemble(
-            ufl.dot(w - self.wb1[0], w - self.wb1[0]) * ufl.dx + \
-            ufl.dot(b - self.wb1[1], b - self.wb1[1]) * ufl.dx)
+
+        loss = ufl.dot(w - self.wb1[0], w - self.wb1[0]) * ufl.dx + \
+               ufl.dot(b - self.wb1[1], b - self.wb1[1]) * ufl.dx
+        if self.alpha > 0:
+            seg = (w - b) / (w + b)
+            seg1 = (self.wb1[0] - self.wb1[1]) / (self.wb1[0] + self.wb1[1])
+            loss = loss + self.alpha * ufl.dot(seg - seg1, seg - seg1) * ufl.dx
+
+        J = scale * d_ad.assemble(loss)    
+
+        #J = scale * d_ad.assemble(
+        #    ufl.dot(w - self.wb1[0], w - self.wb1[0]) * ufl.dx + \
+        #    ufl.dot(b - self.wb1[1], b - self.wb1[1]) * ufl.dx)
 
         #Build controls to update source term values
         controls = [d_ad.Control(self.Si[i]) for i in range(2)]

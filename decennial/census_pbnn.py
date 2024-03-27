@@ -129,6 +129,10 @@ class CensusPBNN(nn.Module):
         for i in range(N_hidden):
             self.cnn1.append(ConvNextBlock(hidden_size, hidden_size, kernel_size))
             self.cnn2.append(ConvNextBlock(hidden_size, hidden_size, kernel_size))
+
+        # To be applied before nearest-neighbor interpolation on the mesh
+        self.training_blur = transforms.GaussianBlur(kernel_size=self.kernel_size, sigma=(0.1, 3))
+        self.inference_blur = transforms.GaussianBlur(kernel_size=self.kernel_size, sigma=1.5)
             
         self.device = torch.device('cpu')        
     
@@ -174,8 +178,11 @@ class CensusPBNN(nn.Module):
         wb0[wb0.isnan()] = 0        
         Si = self.forward_grid(wb0)
         
-        # Move teh source term to the mesh vertices
-        Si = gaussian_blur(Si, kernel_size=self.kernel_size, sigma=1.)
+        # Move the source term to the mesh vertices
+        if self.training:
+            Si = self.training_blur(Si)
+        else:
+            Si = self.inference_blur(Si)
         Si_mesh  = torch.zeros([Si.shape[0],  FctSpace.dim()], dtype=Si.dtype,  device=Si.device)
         for i in range(Si.shape[0]):
             Si_mesh[i] = scalar_img_to_mesh(Si[i], *xy, FctSpace, vals_only=True)

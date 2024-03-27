@@ -17,4 +17,4 @@ crun -p /home/jcolen/envs/sociohydro python -c "print('Hello world')"
 
 crun -p /home/jcolen/envs/sociohydro python train_decennial_PBNN.py \
     --n_epochs 200 \
-    --model_id legacy
+    --model_id scheduled

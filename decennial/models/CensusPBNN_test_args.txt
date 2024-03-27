@@ -1,0 +1,8 @@
+{
+  "county": [
+    "Georgia_Fulton"
+  ],
+  "n_epochs": 10,
+  "batch_size": 8,
+  "model_id": "test"
+}
