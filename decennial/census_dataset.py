@@ -15,7 +15,7 @@ import os
 class CensusDataset(torch.utils.data.Dataset):
     def __init__(self,
                  county='cook_IL',
-                 data_dir='/home/jcolen/data/sociohydro/decennial/processed',
+                 data_dir='/home/jcolen/data/sociohydro/decennial/revision/',
                  spatial_scale=1e3,
                  sigma=3,
                  get_dolfin=TwoDemographicsDynamics,
@@ -51,30 +51,35 @@ class CensusDataset(torch.utils.data.Dataset):
         return arr
     
     def init_data(self):
-        with h5py.File(f'{self.data_dir}/{self.county}.hdf5', 'r') as d:
-            x_grid = d["x_grid"][:] / self.spatial_scale
-            y_grid = d["y_grid"][:] / self.spatial_scale
-            w_grid = d["w_grid_array_masked"][:].transpose(2, 0, 1)
-            b_grid = d["b_grid_array_masked"][:].transpose(2, 0, 1)
+        # First, get county geometry -- mask and mesh
+        self.mesh = d_ad.Mesh(f'{self.data_dir}/meshes/{self.county}.xml')
+        self.mesh_area = d_ad.assemble(1*ufl.dx(self.mesh)) # for normalizing residuals by area
+        self.mask = np.load(f'{self.data_dir}/meshes/{self.county}_dilated_mask.npy')
 
-            for i in range(5): # 5 recorded time points
-                w_grid[i] = self.smooth_with_fill(w_grid[i])
-                b_grid[i] = self.smooth_with_fill(b_grid[i])
+        w_grid = []
+        b_grid = []
+        t = []
+        with h5py.File(f'{self.data_dir}/gridded/{self.county}.hdf5', 'r') as h5f:
+            for year in h5f.keys():
+                t.append(float(year))
+                g = h5f[year]
+                x_grid = g['x_grid'][:] / self.spatial_scale
+                y_grid = g['y_grid'][:] / self.spatial_scale
+
+                w_grid.append(gaussian_filter(g['white_grid'][:], sigma=self.sigma))
+                b_grid.append(gaussian_filter(g['black_grid'][:], sigma=self.sigma))
 
         self.x = x_grid
         self.y = y_grid
-        self.t = np.array([1980, 1990, 2000, 2010, 2020], dtype=float)
+        self.t = np.array(t)
         
         # Convert population to occupation fraction
         wb = np.stack([w_grid, b_grid], axis=1)
+        wb[..., ~self.mask] = np.nan
+        self.mask = np.all(~np.isnan(wb), axis=(0,1))
         self.housing = np.sum(wb, axis=1).max(axis=0) # Assume housing is the maximum occupation level over time
         wb /= self.housing
         self.wb = interp1d(self.t, wb, axis=0, fill_value='extrapolate')
-
-        # Get county geometry -- mask and mesh
-        self.mask = np.all(~np.isnan(wb), axis=(0,1))
-        self.mesh = d_ad.Mesh(f'{self.data_dir}/{self.county}_mesh.xml')
-        self.mesh_area = d_ad.assemble(1*ufl.dx(self.mesh))
     
     def __len__(self):
         return int(np.ptp(self.t))

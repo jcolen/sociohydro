@@ -5,10 +5,10 @@ import json
 from tqdm.auto import tqdm
 from argparse import ArgumentParser
 
-from data_processing import *
-from pbnn import *
+from census_dataset import *
+from census_pbnn import *
 
-def train(model, dataset, n_epochs, batch_size, device, savename='SourcedOnlyPBNN'):
+def train(model, dataset, n_epochs, batch_size, device, savename):
     '''
     Train a model
     '''
@@ -75,27 +75,29 @@ def train(model, dataset, n_epochs, batch_size, device, savename='SourcedOnlyPBN
 
 if __name__ == '__main__':
     parser = ArgumentParser()
-    parser.add_argument('--county', nargs='+', default=['cook_IL', 'fulton_GA', 'harris_TX', 'la_CA'])
+    parser.add_argument('--county', nargs='+', default=['Georgia_Fulton', 'Illinois_Cook', 'Texas_Harris', 'California_Los Angeles'])
     parser.add_argument('--n_epochs', type=int, default=200)
     parser.add_argument('--batch_size', type=int, default=8)
-    parser.add_argument('--modeltype', type=str, default='DecennialPBNN')
-    parser.add_argument('--savename', type=str, default='./validation/decennial/DecennialPBNN')
-    parser.add_argument('--housing_method', type=str, default='constant')
+    parser.add_argument('--model_id', type=str, default='0')
     args = parser.parse_args()
 
-    with open(f'{args.savename}_args.txt', 'w') as f:
-        json.dump(args.__dict__, f, indent=2)
-    
     datasets = []
     for county in args.county:
-        datasets.append(CensusDataset(county, housing_method=args.housing_method))
+        datasets.append(CensusDataset(county))
     dataset = torch.utils.data.ConcatDataset(datasets)
         
     device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
-    model = eval(args.modeltype)().to(device)
+    model = CensusPBNN().to(device)
+
+    savename = f'models/{model.__class__.__name__}_{args.model_id}'
+    print(f'Saving information to {savename}')
+
+    with open(f'{savename}_args.txt', 'w') as f:
+        json.dump(args.__dict__, f, indent=2)
+    
     
     with torch.autograd.set_detect_anomaly(True):
-        train(model, dataset, args.n_epochs, args.batch_size, device, args.savename)
+        train(model, dataset, args.n_epochs, args.batch_size, device, savename)
         
         for ds in dataset.datasets:
-            compute_saliency(model, ds, device, args.savename)
+            compute_saliency(model, ds, device, savename)
