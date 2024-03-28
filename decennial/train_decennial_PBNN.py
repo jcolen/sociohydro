@@ -19,7 +19,6 @@ def train(model, dataset, n_epochs, batch_size, device, savename):
     step = 0
     
     idxs = np.arange(len(dataset), dtype=int)
-
     
     with tqdm(total=n_epochs) as pbar:
         for epoch in range(n_epochs):
