@@ -1,10 +1,9 @@
 #!/bin/bash
 #
 #SBATCH --job-name=decennial_PBNN
-#SBATCH --output=/home/jcolen/scratch/%x_%A_%a.out
+#SBATCH --output=/home/jcolen/scratch/%x_%A.out
 #SBATCH --partition=gpu
 #SBATCH --gres=gpu:1
-#SBATCH --array=0-2
 #SBATCH --ntasks=2
 #SBATCH --mem=16G
 
@@ -19,4 +18,4 @@ echo "STARTING" ${SLURM_ARRAY_TASK_ID}
 
 crun -p /home/jcolen/envs/sociohydro python train_decennial_PBNN.py \
     --n_epochs 200 \
-    --model_id ${SLURM_ARRAY_TASK_ID}
+    --model_id revision

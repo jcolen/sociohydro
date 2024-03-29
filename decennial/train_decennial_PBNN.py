@@ -74,53 +74,47 @@ def train(model, train_dataset, val_dataset, n_epochs, batch_size, device, saven
 
 if __name__ == '__main__':
     parser = ArgumentParser()
-    #parser.add_argument('--county', nargs='+', default=['Georgia_Fulton', 'Illinois_Cook', 'Texas_Harris', 'California_Los Angeles'])
+    parser.add_argument('--val_county', nargs='+', 
+        default=['Georgia_Fulton', 'Illinois_Cook', 'Texas_Harris', 'California_Los Angeles'])
     parser.add_argument('--n_epochs', type=int, default=200)
     parser.add_argument('--batch_size', type=int, default=8)
-    parser.add_argument('--model_id', type=int, default=0)
+    parser.add_argument('--model_id', type=str, default='revision')
     args = parser.parse_args()
 
-    counties = [os.path.basename(c)[:-4] for c in glob.glob(
-        '/home/jcolen/data/sociohydro/decennial/revision/meshes/*.xml')]
-    counties = [c for c in counties if not 'San Bernardino' in c] # Too big, causes memory issues
-    N = len(counties)
-    Nv = len(counties) // 3
-
-    rng = np.random.default_rng(1)
-    rng.shuffle(counties)
-    counties = np.roll(counties, Nv * args.model_id)
-
-    train_counties = counties[Nv:]
-    val_counties = counties[:Nv]
-    args.__dict__['train_county'] = list(train_counties)
-    args.__dict__['val_county'] = list(val_counties)
-
-    print('Training counties')
-    print('-----------------')
-    train_datasets = []
-    for county in args.train_county:
-        print(county)
-        train_datasets.append(CensusDataset(county))
-        train_datasets[-1].training()
-    train_dataset = torch.utils.data.ConcatDataset(train_datasets)
-
-    print()
-    print('Validation counties')
-    print('-------------------')
-    val_datasets = []
-    for county in args.val_county:
-        print(county)
-        val_datasets.append(CensusDataset(county))
-        val_datasets[-1].validate()
-    val_dataset = torch.utils.data.ConcatDataset(val_datasets)
-
     '''
-    # Legacy models had no train/test split
+    # Legacy models in first draft had no train/test split
     datasets = []
     for county in args.county:
         datasets.append(CensusDataset(county))
     dataset = torch.utils.data.ConcatDataset(datasets)
     '''
+
+    '''
+    In the revision, train on more counties
+    For the counties in Figure 3 use only the first decade of Census data
+    '''
+    counties = [os.path.basename(c)[:-4] for c in glob.glob(
+        '/home/jcolen/data/sociohydro/decennial/revision/meshes/*.xml')]
+    counties = [c for c in counties if not 'San Bernardino' in c] # Too big, causes memory issues
+
+    # Build datasets
+    train_datasets = []
+    val_datasets = []
+    train_idxs = np.arange(0, 10, dtype=int) # First decade goes to training
+    val_idxs = np.arange(10, 40, dtype=int)  # Remaining three decades for validation
+    for county in counties:
+        ds = CensusDataset(county)
+        if county in args.val_county:
+            train_datasets.append(torch.utils.data.Subset(ds, train_idxs))
+            val_datasets.append(torch.utils.data.Subset(ds, val_idxs))
+        else:
+            train_datasets.append(ds)
+    train_dataset = torch.utils.data.ConcatDataset(train_datasets)
+    val_dataset = torch.utils.data.ConcatDataset(val_datasets)
+    
+    print(f'Training dataset length: {len(train_dataset)}')
+    print(f'Validation dataset length: {len(val_dataset)}')
+
     device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
     model = CensusPBNN().to(device)
 
