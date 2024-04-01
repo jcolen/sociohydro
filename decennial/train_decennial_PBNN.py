@@ -18,7 +18,8 @@ def train(model, train_dataset, val_dataset, n_epochs, batch_size, device, saven
     train_loss = []
     val_loss = []
     step = 0
-    
+    best_loss = 1e10
+
     idxs = np.arange(len(train_dataset), dtype=int)
     
     with tqdm(total=n_epochs) as pbar:
@@ -59,14 +60,15 @@ def train(model, train_dataset, val_dataset, n_epochs, batch_size, device, saven
                         val_loss[epoch] += J
                         ebar.update()
 
-
-            torch.save(
-                {
-                    'state_dict': model.state_dict(),
-                    'val_loss': val_loss,
-                    'train_loss': train_loss,
-                },
-                f'{savename}.ckpt')
+            if val_loss[-1] <= best_loss:
+                torch.save(
+                    {
+                        'state_dict': model.state_dict(),
+                        'val_loss': val_loss,
+                        'train_loss': train_loss,
+                    },
+                    f'{savename}.ckpt')
+                best_loss = val_loss[-1]
 
             sch.step()
             pbar.update()
@@ -100,15 +102,15 @@ if __name__ == '__main__':
     # Build datasets
     train_datasets = []
     val_datasets = []
-    train_idxs = np.arange(0, 10, dtype=int) # First decade goes to training
-    val_idxs = np.arange(10, 40, dtype=int)  # Remaining three decades for validation
     for county in counties:
-        ds = CensusDataset(county)
         if county in args.val_county:
-            train_datasets.append(torch.utils.data.Subset(ds, train_idxs))
-            val_datasets.append(torch.utils.data.Subset(ds, val_idxs))
+            train_datasets.append(torch.utils.data.Subset(
+                CensusDataset(county), 
+                np.arange(0, 10, dtype=int), # First decade only for training
+            ))
+            val_datasets.append(CensusDataset(county))
         else:
-            train_datasets.append(ds)
+            train_datasets.append(CensusDataset(county))
     train_dataset = torch.utils.data.ConcatDataset(train_datasets)
     val_dataset = torch.utils.data.ConcatDataset(val_datasets)
     
