@@ -1,0 +1,15 @@
+{
+  "n_epochs": 200,
+  "batch_size": 32,
+  "savename": "./models/simulation/SimulationForecasting_integrated",
+  "dynamic_type": "integrated",
+  "train_folder": [
+    "/home/jcolen/data/sociohydro/2024-02-05_MCPhaseDiagram/data/delta-0.00_kappa2.00",
+    "/home/jcolen/data/sociohydro/2024-02-05_MCPhaseDiagram/data/delta-0.00_kappa0.72",
+    "/home/jcolen/data/sociohydro/2024-02-05_MCPhaseDiagram/data/delta-0.00_kappa1.36"
+  ],
+  "val_folder": [
+    "/home/jcolen/data/sociohydro/2024-02-05_MCPhaseDiagram/data/delta-0.00_kappa1.04",
+    "/home/jcolen/data/sociohydro/2024-02-05_MCPhaseDiagram/data/delta-0.00_kappa1.68"
+  ]
+}
