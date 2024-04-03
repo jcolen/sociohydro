@@ -1,0 +1,24 @@
+{
+  "n_epochs": 100,
+  "batch_size": 8,
+  "val_county": [
+    "Georgia_Fulton",
+    "Illinois_Cook",
+    "Texas_Harris",
+    "California_Los Angeles"
+  ],
+  "val_tmax": 10,
+  "model_id": "new_validation",
+  "random_seed": 0,
+  "num_train_counties": 8,
+  "train_county": [
+    "California_Sacramento",
+    "Michigan_Oakland",
+    "Florida_Palm Beach",
+    "Texas_Tarrant",
+    "Nevada_Clark",
+    "Texas_Dallas",
+    "Georgia_Fulton",
+    "Ohio_Franklin"
+  ]
+}

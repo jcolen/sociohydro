@@ -29,38 +29,35 @@ def train(model, train_dataset, val_dataset, n_epochs, batch_size, device, saven
             np.random.shuffle(idxs)
             d_ad.set_working_tape(d_ad.Tape())
 
-            with tqdm(total=len(train_dataset), leave=False) as ebar:
-                for i in range(len(train_dataset)):
-                    batch = train_dataset[idxs[i]]
-                    batch['wb0'] = batch['wb0'].to(device)
+            for i in tqdm(range(len(train_dataset)), leave=False):
+                batch = train_dataset[idxs[i]]
+                batch['wb0'] = batch['wb0'].to(device)
 
-                    params, J = model.training_step(batch)
-                    train_loss.append(J)
-                    step += 1
-                    ebar.update()
+                params, J = model.training_step(batch)
+                train_loss.append(J)
+                step += 1
 
-                    if step % batch_size == 0:
-                        ebar.set_postfix(loss=np.mean(train_loss[-batch_size:]))
-
-                        opt.step()
-                        d_ad.set_working_tape(d_ad.Tape())
-                        opt.zero_grad()
+                if step % batch_size == 0:
+                    opt.step()
+                    d_ad.set_working_tape(d_ad.Tape())
+                    opt.zero_grad()
 
             val_loss.append(0)
             model.eval()
 
-            with tqdm(total=len(val_dataset), leave=False) as ebar:
-                with torch.no_grad():
-                    for i in range(len(val_dataset)):
-                        d_ad.set_working_tape(d_ad.Tape())
-                        batch = val_dataset[i]
-                        batch['wb0'] = batch['wb0'].to(device)
+            # Change our evaluation metric to the forecasting accuracy over 40 years
+            for dataset in tqdm(val_dataset.datasets, leave=False):
+                dataset.validate()
+                ic = dataset[0]
+                ic['wb0'] = ic['wb0'].to(device)
+                mask = ic['mask']
+                wb2020 = torch.FloatTensor(dataset[39]['wb1']).to(device)
 
-                        params, J = model.validation_step(batch)
-                        val_loss[epoch] += J
-                        ebar.update()
+                with torch.no_grad(), d_ad.stop_annotating():
+                    wbNN = model.simulate(ic, dataset.mesh, device, tmax=40, dt=1)
+                    val_loss[epoch] += (wbNN - wb2020).pow(2).sum(0)[mask].mean().item()
 
-            if val_loss[-1] <= best_loss:
+            if val_loss[epoch] <= best_loss:
                 torch.save(
                     {
                         'state_dict': model.state_dict(),
@@ -68,19 +65,22 @@ def train(model, train_dataset, val_dataset, n_epochs, batch_size, device, saven
                         'train_loss': train_loss,
                     },
                     f'{savename}.ckpt')
-                best_loss = val_loss[-1]
+                best_loss = val_loss[epoch]
 
             sch.step()
             pbar.update()
-            pbar.set_postfix(val_loss=val_loss[-1])
+            pbar.set_postfix(val_loss=val_loss[epoch])
 
 if __name__ == '__main__':
     parser = ArgumentParser()
+    parser.add_argument('--n_epochs', type=int, default=100)
+    parser.add_argument('--batch_size', type=int, default=8)
     parser.add_argument('--val_county', nargs='+', 
         default=['Georgia_Fulton', 'Illinois_Cook', 'Texas_Harris', 'California_Los Angeles'])
-    parser.add_argument('--n_epochs', type=int, default=200)
-    parser.add_argument('--batch_size', type=int, default=8)
-    parser.add_argument('--model_id', type=str, default='revision')
+    parser.add_argument('--val_tmax', type=int, default=10)
+    parser.add_argument('--model_id', type=str, default='new_validation')
+    parser.add_argument('--random_seed', type=int, default=0)
+    parser.add_argument('--num_train_counties', type=int, default=8)
     args = parser.parse_args()
 
     '''
@@ -91,32 +91,32 @@ if __name__ == '__main__':
     dataset = torch.utils.data.ConcatDataset(datasets)
     '''
 
-    '''
-    In the revision, train on more counties
-    For the counties in Figure 3 use only the first decade of Census data
-    '''
+    # In the revision, train on more counties
     counties = [os.path.basename(c)[:-4] for c in glob.glob(
         '/home/jcolen/data/sociohydro/decennial/revision/meshes/*.xml')]
     counties = [c for c in counties if not 'San Bernardino' in c] # Too big, causes memory issues
 
-    # Build datasets
-    train_datasets = []
-    val_datasets = []
-    train_idxs = np.arange(0, 10, dtype=int) # First decade goes to training
-    val_idxs = np.arange(10, 40, dtype=int) # Remaining 3 decades for validation
-    for county in counties:
-        ds = CensusDataset(county)
-        if county in args.val_county:
-            train_datasets.append(torch.utils.data.Subset(ds, train_idxs))
-            val_datasets.append(torch.utils.data.Subset(ds, val_idxs))
-        else:
-            train_datasets.append(ds)
+    rng = np.random.default_rng(args.random_seed)
+    train_counties = rng.choice(counties, args.num_train_counties)
+    args.__dict__['train_county'] = list(train_counties)
+
+    train_datasets = [CensusDataset(county) for county in train_counties]
+    val_datasets = [CensusDataset(county) for county in args.val_county]
+    
+    # Include first decade of Census data in from Figure 3 counties
+    for county in args.val_county:
+        train_datasets.append(torch.utils.data.Subset(
+            CensusDataset(county), 
+            np.arange(0, args.val_tmax, dtype=int)
+        ))
+    
     train_dataset = torch.utils.data.ConcatDataset(train_datasets)
     val_dataset = torch.utils.data.ConcatDataset(val_datasets)
     
     print(f'Training dataset length: {len(train_dataset)}')
     print(f'Validation dataset length: {len(val_dataset)}')
 
+    # Build model
     device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
     model = CensusPBNN().to(device)
 
@@ -129,10 +129,3 @@ if __name__ == '__main__':
     with torch.autograd.set_detect_anomaly(True):
         train(model, train_dataset, val_dataset, 
               args.n_epochs, args.batch_size, device, savename)
-
-        # Load best model from checkpoint
-        info = torch.load(f'{savename}.ckpt')
-        model.load_state_dict(info['state_dict'])
-        
-        #for dataset in val_dataset.datasets:
-        #    compute_saliency(model, dataset, device, savename)
