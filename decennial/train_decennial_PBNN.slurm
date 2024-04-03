@@ -17,5 +17,5 @@ crun -p /home/jcolen/envs/sociohydro python -c "print('Hello world')"
 echo "STARTING" ${SLURM_ARRAY_TASK_ID}
 
 crun -p /home/jcolen/envs/sociohydro python train_decennial_PBNN.py \
-    --n_epochs 200 \
-    --model_id revision
+    --n_epochs 100 \
+    --model_id revision_v3

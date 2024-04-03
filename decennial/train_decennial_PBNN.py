@@ -102,15 +102,15 @@ if __name__ == '__main__':
     # Build datasets
     train_datasets = []
     val_datasets = []
+    train_idxs = np.arange(0, 10, dtype=int) # First decade goes to training
+    val_idxs = np.arange(10, 40, dtype=int) # Remaining 3 decades for validation
     for county in counties:
+        ds = CensusDataset(county)
         if county in args.val_county:
-            train_datasets.append(torch.utils.data.Subset(
-                CensusDataset(county), 
-                np.arange(0, 10, dtype=int), # First decade only for training
-            ))
-            val_datasets.append(CensusDataset(county))
+            train_datasets.append(torch.utils.data.Subset(ds, train_idxs))
+            val_datasets.append(torch.utils.data.Subset(ds, val_idxs))
         else:
-            train_datasets.append(CensusDataset(county))
+            train_datasets.append(ds)
     train_dataset = torch.utils.data.ConcatDataset(train_datasets)
     val_dataset = torch.utils.data.ConcatDataset(val_datasets)
     
@@ -129,6 +129,10 @@ if __name__ == '__main__':
     with torch.autograd.set_detect_anomaly(True):
         train(model, train_dataset, val_dataset, 
               args.n_epochs, args.batch_size, device, savename)
+
+        # Load best model from checkpoint
+        info = torch.load(f'{savename}.ckpt')
+        model.load_state_dict(info['state_dict'])
         
-        for dataset in val_dataset.datasets:
-            compute_saliency(model, dataset, device, savename)
+        #for dataset in val_dataset.datasets:
+        #    compute_saliency(model, dataset, device, savename)
