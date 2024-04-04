@@ -5,61 +5,6 @@ import numpy as np
 from torchvision import transforms
 from torchvision.transforms.functional import gaussian_blur
 
-import h5py
-from tqdm.auto import trange, tqdm
-
-def compute_saliency(model, dataset, device, savename):
-    def aggregate_sample(model, sample):
-        sample['wb0'] = sample['wb0'].to(device)[None]
-        sample['wb0'][sample['wb0'].isnan()] = 0
-        sample['wb0'].requires_grad = True
-        Si = model.forward_grid(sample['wb0'])
-
-        nnz = np.asarray(np.nonzero(sample['mask'])).T
-        np.random.shuffle(nnz)
-        pts = nnz[:100]
-
-        G_S = []
-        for pt in pts:
-            loc = torch.zeros_like(Si[0])
-            loc[pt[0], pt[1]] = 1.
-
-            grad = []
-            for j in range(Si.shape[0]):
-                grad.append(torch.autograd.grad(Si[j], sample['wb0'], grad_outputs=loc, retain_graph=True)[0])
-            grad = torch.stack(grad) #[2, 2, Y, X]
-            G_S.append(grad.detach().cpu().numpy().squeeze())
-
-        center = np.asarray([G_S[0].shape[-2]/2, G_S[0].shape[-1]/2]).astype(int)
-        shifts = np.asarray(center-pts)
-
-        G_S_shifted = np.asarray([np.roll(g, shift, axis=(-2,-1)) for shift, g in zip(shifts, G_S)])
-
-        return G_S_shifted
-    
-    with h5py.File(f'{savename}_saliency.h5', 'a') as h5f:
-        ds = h5f.require_group(dataset.county)
-
-        if 'X' in ds:
-            del ds['X']
-            del ds['Y']
-        if 'G_S' in ds:
-            del ds['G_S']
-        
-        ds.create_dataset('X', data=dataset.x) # REMEMBER TO SUBTRACT MEAN TO ALIGN
-        ds.create_dataset('Y', data=dataset.y)
-
-        gs = ds.require_group('G_S')
-        for i in trange(len(dataset)):
-            sample = dataset[i]
-            G_S = aggregate_sample(model, sample)
-            gs.create_dataset(f'{int(sample["t"])}', data=G_S)
-
-        ds.create_dataset(
-            'G_S_sum',
-            data=np.sum(np.asarray([gs[t] for t in gs.keys()]), axis=(0,1))
-        )
-            
 
 '''
 Building blocks
@@ -91,7 +36,7 @@ class ConvNextBlock(nn.Module):
 '''
 Neural network
 '''
-class CensusPBNN(nn.Module):
+class CensusForecasting(nn.Module):
     def __init__(self,
                  input_dim=2,
                  output_dim=2,
@@ -126,36 +71,25 @@ class CensusPBNN(nn.Module):
         for i in range(N_hidden):
             self.cnn1.append(ConvNextBlock(hidden_size, hidden_size, kernel_size))
             self.cnn2.append(ConvNextBlock(hidden_size, hidden_size, kernel_size))
-            
-        self.device = torch.device('cpu')
-    
-    def training_step(self, sample):
-        problem = sample['problem']
-        Si = self.forward(sample['wb0'][None], 
-                          problem.FctSpace, 
-                          (sample['x'], sample['y']))
-        Si = Si.flatten()
-        problem.set_params(Si.detach().cpu().numpy())
-        loss = problem.residual()
-        grad = problem.grad(sample['wb0'].device)
 
-        Si.backward(gradient=grad / sample['dt'])
-        
-        return Si, loss
+        # To be applied before nearest-neighbor interpolation on the mesh
+        self.training_blur = transforms.GaussianBlur(kernel_size=self.kernel_size, sigma=(0.1, 3))
+        self.inference_blur = transforms.GaussianBlur(kernel_size=self.kernel_size, sigma=1.5)
     
-    def validation_step(self, sample):
-        problem = sample['problem']
-        Si = self.forward(sample['wb0'][None], 
-                          problem.FctSpace, 
-                          (sample['x'], sample['y']))
-        problem.set_params(Si.detach().cpu().numpy())
-        loss = problem.residual()
-                
-        return Si, loss
-    
-    def forward_grid(self, wb0):
-        # CNN part of computation, operating on grid        
-        x = self.read_in(wb0)
+    def batch_step(self, batch, device):
+        wb = batch['wb'].to(device)
+        wb[wb.isnan()] = 0.
+        mask = batch['mask'] # Only use points in county for loss
+
+        wbNN = self.simulate(wb[0:1], n_steps=wb.shape[0]-1, dt=batch['dt'])[0]
+        loss = F.l1_loss(wbNN[:,:,mask], wb[1:,:, mask])
+        return loss
+
+    def forward(self, x):
+        '''
+        Predict time derivative given population distribution
+        '''
+        x = self.read_in(x)
         for cell in self.cnn1:
             x = x + cell(x)
         latent = self.downsample(x)
@@ -163,61 +97,20 @@ class CensusPBNN(nn.Module):
             latent = latent + cell(latent)
         latent = F.interpolate(latent, x.shape[-2:])
         x = torch.cat([x, latent], dim=1)
-        Si = self.read_out(x).squeeze() # Remove batch dimension
-        return Si
+        x = self.read_out(x)
 
-    def forward(self, wb0, FctSpace, xy):
-        # Compute the source term on the regular grid using the CNN
-        wb0[wb0.isnan()] = 0        
-        Si = self.forward_grid(wb0)
-        
-        # Move the source term to the mesh vertices
         if self.training:
-            Si = self.training_blur(Si)
+            x = self.training_blur(x)
         else:
-            Si = self.inference_blur(Si)
-        Si_mesh  = torch.zeros([Si.shape[0],  FctSpace.dim()], dtype=Si.dtype,  device=Si.device)
-        for i in range(Si.shape[0]):
-            Si_mesh[i] = scalar_img_to_mesh(Si[i], *xy, FctSpace, vals_only=True)
+            x = self.inference_blur(x)
 
-        return Si_mesh
+        return x
     
-    def simulate(self, sample, mesh, device, tmax=40, dt=1):
-        problem = sample['problem']
-        problem.dt.assign(d_ad.Constant(dt))
-        FctSpace = problem.FctSpace
+    def simulate(self, wb, n_steps=40, dt=1):
+        b, c, h, w = wb.shape
+        preds = torch.zeros([b, n_steps, c, h, w], dtype=wb.dtype, device=wb.device)
+        for tt in range(n_steps):
+            wb = wb + dt * self(wb) # Forward difference time stepping
+            preds[:, tt] += wb
         
-        Dt = d_ad.Constant(dt)
-        x_img = sample['x']
-        y_img = sample['y']
-        mask = sample['mask']
-        
-        # Interpolate initial condition to the mesh for the Dolfin problem
-        for i in range(self.input_dim):
-            problem.wb0[i].assign(scalar_img_to_mesh(sample['wb0'][i], x_img, y_img, FctSpace))
-
-        #Interpolate w0, b0 to grid for neural network
-        wb = torch.FloatTensor(np.stack([
-            mesh_to_scalar_img(problem.wb0[i], mesh, x_img, y_img, mask) \
-            for i in range(self.input_dim)
-        ])).to(device)
-        
-        steps = int(np.round(tmax / dt))
-        for tt in range(steps):
-            #Run PBNN to get sources and assign to variational parameters
-            Si = self.forward(wb[None], FctSpace, (x_img, y_img))
-            problem.set_params(Si=Si.detach().cpu().numpy())
-            
-            #Solve variational problem and update w0, b0
-            wb = problem.forward()
-            w, b = wb.split(True)
-            problem.wb0[0].assign(w)
-            problem.wb0[1].assign(b)
-            
-            #Interpolate w0, b0 to grid for neural network
-            wb = torch.FloatTensor(np.stack([
-                mesh_to_scalar_img(problem.wb0[i], mesh, x_img, y_img, mask) \
-                for i in range(self.input_dim)
-            ])).to(device)
-                                    
-        return wb
+        return preds

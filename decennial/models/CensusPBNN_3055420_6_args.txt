@@ -8,17 +8,18 @@
     "California_Los Angeles"
   ],
   "val_tmax": 10,
-  "model_id": "3053489_2",
-  "train_set_seed": 2,
+  "model_id": "3055420_6",
+  "train_set_seed": 6,
   "num_train_counties": 8,
+  "use_all_counties": false,
   "train_county": [
-    "California_Sacramento",
-    "Texas_Tarrant",
-    "New York_Queens",
-    "Nevada_Clark",
-    "Pennsylvania_Philadelphia",
-    "Pennsylvania_Allegheny",
     "California_Alameda",
-    "New York_Queens"
+    "Arizona_Maricopa",
+    "Arizona_Maricopa",
+    "Minnesota_Hennepin",
+    "Utah_Salt Lake",
+    "Minnesota_Hennepin",
+    "California_Santa Clara",
+    "Ohio_Cuyahoga"
   ]
 }

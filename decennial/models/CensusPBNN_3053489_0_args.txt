@@ -9,7 +9,7 @@
   ],
   "val_tmax": 10,
   "model_id": "3053489_0",
-  "random_seed": 0,
+  "train_set_seed": 0,
   "num_train_counties": 8,
   "train_county": [
     "California_Sacramento",

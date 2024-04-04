@@ -8,17 +8,18 @@
     "California_Los Angeles"
   ],
   "val_tmax": 10,
-  "model_id": "3053489_3",
-  "train_set_seed": 3,
+  "model_id": "3055420_5",
+  "train_set_seed": 5,
   "num_train_counties": 8,
+  "use_all_counties": false,
   "train_county": [
+    "California_Santa Clara",
     "Pennsylvania_Allegheny",
-    "Georgia_Fulton",
-    "Washington_King",
-    "New York_Suffolk",
-    "Washington_King",
+    "Ohio_Franklin",
     "Pennsylvania_Allegheny",
-    "Texas_Bexar",
-    "Illinois_Cook"
+    "Massachusetts_Middlesex",
+    "Arizona_Maricopa",
+    "Michigan_Oakland",
+    "Nevada_Clark"
   ]
 }

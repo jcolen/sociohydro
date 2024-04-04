@@ -79,7 +79,7 @@ if __name__ == '__main__':
         default=['Georgia_Fulton', 'Illinois_Cook', 'Texas_Harris', 'California_Los Angeles'])
     parser.add_argument('--val_tmax', type=int, default=10)
     parser.add_argument('--model_id', type=str, default='new_validation')
-    parser.add_argument('--random_seed', type=int, default=0)
+    parser.add_argument('--train_set_seed', type=int, default=0)
     parser.add_argument('--num_train_counties', type=int, default=8)
     parser.add_argument('--use_all_counties', action='store_true')
     args = parser.parse_args()
@@ -98,9 +98,9 @@ if __name__ == '__main__':
     counties = [c for c in counties if not 'San Bernardino' in c] # Too big, causes memory issues
 
     if args.use_all_counties:
-        train_counties = [c for county in counties if not c in args.val_county]
+        train_counties = [c for c in counties if not c in args.val_county]
     else:
-        rng = np.random.default_rng(args.random_seed)
+        rng = np.random.default_rng(args.train_set_seed)
         train_counties = rng.choice(counties, args.num_train_counties)
     
     args.__dict__['train_county'] = list(train_counties)

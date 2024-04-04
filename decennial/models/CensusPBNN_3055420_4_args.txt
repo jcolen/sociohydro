@@ -8,17 +8,18 @@
     "California_Los Angeles"
   ],
   "val_tmax": 10,
-  "model_id": "3053489_1",
-  "train_set_seed": 1,
+  "model_id": "3055420_4",
+  "train_set_seed": 4,
   "num_train_counties": 8,
+  "use_all_counties": false,
   "train_county": [
-    "Massachusetts_Middlesex",
-    "Florida_Palm Beach",
-    "California_Orange",
+    "Florida_Orange",
     "Utah_Salt Lake",
-    "Texas_Dallas",
-    "Texas_Harris",
-    "Pennsylvania_Allegheny",
-    "Utah_Salt Lake"
+    "Texas_Bexar",
+    "Florida_Palm Beach",
+    "New York_Kings",
+    "California_Contra Costa",
+    "Utah_Salt Lake",
+    "Georgia_Fulton"
   ]
 }

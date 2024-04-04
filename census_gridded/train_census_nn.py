@@ -7,7 +7,7 @@ from tqdm.auto import tqdm
 from argparse import ArgumentParser
 
 from census_dataset import *
-from census_pbnn import *
+from census_nn import *
 
 def train(model, train_dataset, val_dataset, n_epochs, batch_size, device, savename):
     '''
@@ -27,36 +27,39 @@ def train(model, train_dataset, val_dataset, n_epochs, batch_size, device, saven
             model.train()
 
             np.random.shuffle(idxs)
-            d_ad.set_working_tape(d_ad.Tape())
 
             for i in tqdm(range(len(train_dataset)), leave=False):
                 batch = train_dataset[idxs[i]]
-                batch['wb0'] = batch['wb0'].to(device)
+                wb = batch['wb'].to(device)
+                wb[wb.isnan()] = 0.
+                mask = batch['mask'] # Only use points in county for loss
 
-                params, J = model.training_step(batch)
-                train_loss.append(J)
+                wbNN = wb[0] + batch['dt'] * model(wb[0:1])[0]
+                loss = F.l1_loss(wbNN[:,mask], wb[1,:,mask])
+
+                loss.backward()
+                train_loss.append(loss.item())
                 step += 1
 
                 if step % batch_size == 0:
                     opt.step()
-                    d_ad.set_working_tape(d_ad.Tape())
                     opt.zero_grad()
 
             val_loss.append(0)
             model.eval()
 
-            # Change our evaluation metric to the forecasting accuracy over 40 years
-            for dataset in tqdm(val_dataset.datasets, leave=False):
-                dataset.validate()
-                ic = dataset[0]
-                ic['wb0'] = ic['wb0'].to(device)
-                mask = ic['mask']
-                wb2020 = torch.FloatTensor(dataset[39]['wb1']).to(device)
+            # Our evaluation metric is the forecasting accuracy over 40 years
+            with torch.no_grad():
+                for dataset in tqdm(val_dataset.datasets, leave=False):
+                    batch = dataset[0]
+                    wb = batch['wb'].to(device)
+                    wb[wb.isnan()] = 0.
+                    mask = batch['mask'] # Only use points in county for loss
 
-                with torch.no_grad(), d_ad.stop_annotating():
-                    wbNN = model.simulate(ic, dataset.mesh, device, tmax=40, dt=1)
-                    val_loss[epoch] += (wbNN - wb2020).pow(2).sum(0)[mask].mean().item()
+                    wbNN = model.simulate(wb[0:1], n_steps=wb.shape[0]-1, dt=batch['dt'])[0]
+                    val_loss[epoch] += (wbNN[-1,:,mask]-wb[-1,:,mask]).pow(2).sum(0).mean().item()
 
+            # Save if the model showed an improvement
             if val_loss[epoch] <= best_loss:
                 torch.save(
                     {
@@ -78,25 +81,25 @@ if __name__ == '__main__':
     parser.add_argument('--val_county', nargs='+', 
         default=['Georgia_Fulton', 'Illinois_Cook', 'Texas_Harris', 'California_Los Angeles'])
     parser.add_argument('--val_tmax', type=int, default=10)
-    parser.add_argument('--model_id', type=str, default='new_validation')
-    parser.add_argument('--random_seed', type=int, default=0)
+    parser.add_argument('--model_id', type=str, default='gridded')
+    parser.add_argument('--train_set_seed', type=int, default=0)
     parser.add_argument('--num_train_counties', type=int, default=8)
     args = parser.parse_args()
 
-    '''
     # Legacy models in first draft had no train/test split
-    datasets = []
-    for county in args.county:
-        datasets.append(CensusDataset(county))
-    dataset = torch.utils.data.ConcatDataset(datasets)
-    '''
+    train_datasets = []
+    val_datasets = []
+    for county in args.val_county:
+        train_datasets.append(CensusDataset(county))
+        val_datasets.append(CensusDataset(county))
 
+    '''
     # In the revision, train on more counties
     counties = [os.path.basename(c)[:-4] for c in glob.glob(
         '/home/jcolen/data/sociohydro/decennial/revision/meshes/*.xml')]
     counties = [c for c in counties if not 'San Bernardino' in c] # Too big, causes memory issues
 
-    rng = np.random.default_rng(args.random_seed)
+    rng = np.random.default_rng(args.train_set_seed)
     train_counties = rng.choice(counties, args.num_train_counties)
     args.__dict__['train_county'] = list(train_counties)
 
@@ -109,16 +112,21 @@ if __name__ == '__main__':
             CensusDataset(county), 
             np.arange(0, args.val_tmax, dtype=int)
         ))
-    
+    '''
     train_dataset = torch.utils.data.ConcatDataset(train_datasets)
     val_dataset = torch.utils.data.ConcatDataset(val_datasets)
+
+    for ds in train_dataset.datasets:
+        ds.training()
+    for ds in val_dataset.datasets:
+        ds.validate()
     
     print(f'Training dataset length: {len(train_dataset)}')
     print(f'Validation dataset length: {len(val_dataset)}')
 
     # Build model
     device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
-    model = CensusPBNN().to(device)
+    model = CensusForecasting().to(device)
 
     savename = f'models/{model.__class__.__name__}_{args.model_id}'
     print(f'Saving information to {savename}')

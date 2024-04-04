@@ -1,0 +1,14 @@
+{
+  "n_epochs": 100,
+  "batch_size": 8,
+  "val_county": [
+    "Georgia_Fulton",
+    "Illinois_Cook",
+    "Texas_Harris",
+    "California_Los Angeles"
+  ],
+  "val_tmax": 10,
+  "model_id": "gridded",
+  "random_seed": 0,
+  "num_train_counties": 8
+}
