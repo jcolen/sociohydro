@@ -8,17 +8,17 @@
     "California_Los Angeles"
   ],
   "val_tmax": 10,
-  "model_id": "new_validation",
-  "random_seed": 0,
+  "model_id": "3053489_1",
+  "random_seed": 1,
   "num_train_counties": 8,
   "train_county": [
-    "California_Sacramento",
-    "Michigan_Oakland",
+    "Massachusetts_Middlesex",
     "Florida_Palm Beach",
-    "Texas_Tarrant",
-    "Nevada_Clark",
+    "California_Orange",
+    "Utah_Salt Lake",
     "Texas_Dallas",
-    "Georgia_Fulton",
-    "Ohio_Franklin"
+    "Texas_Harris",
+    "Pennsylvania_Allegheny",
+    "Utah_Salt Lake"
   ]
 }
