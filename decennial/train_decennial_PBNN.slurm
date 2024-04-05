@@ -4,7 +4,7 @@
 #SBATCH --output=/home/jcolen/scratch/%x_%A_%a.out
 #SBATCH --partition=gpu
 #SBATCH --gres=gpu:1
-#SBATCH --array=4-7
+#SBATCH --array=1-8
 #SBATCH --ntasks=2
 #SBATCH --mem=8G
 
@@ -19,7 +19,7 @@ echo "STARTING TO TRAIN" ${model_id}
 
 crun -p /home/jcolen/envs/sociohydro python train_decennial_PBNN.py \
     --model_id ${model_id} \
-    --random_seed ${SLURM_ARRAY_TASK_ID}
+    --train_set_seed ${SLURM_ARRAY_TASK_ID}
 
 echo "STARTING TO COMPUTE SALIENCY" ${model_id}
 

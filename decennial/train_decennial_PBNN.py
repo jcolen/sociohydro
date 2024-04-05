@@ -96,15 +96,17 @@ if __name__ == '__main__':
     counties = [os.path.basename(c)[:-4] for c in glob.glob(
         '/home/jcolen/data/sociohydro/decennial/revision/meshes/*.xml')]
     counties = [c for c in counties if not 'San Bernardino' in c] # Too big, causes memory issues
+    counties = [c for c in counties if not c in args.val_county]
 
     if args.use_all_counties:
-        train_counties = [c for c in counties if not c in args.val_county]
+        train_counties = counties
+        args.__dict__['num_train_counties'] = len(train_counties)
     else:
         rng = np.random.default_rng(args.train_set_seed)
-        train_counties = rng.choice(counties, args.num_train_counties)
-    
-    args.__dict__['train_county'] = list(train_counties)
+        train_counties = rng.choice(counties, args.num_train_counties, replace=False)
 
+    args.__dict__['train_county'] = list(train_counties)
+    
     train_datasets = [CensusDataset(county) for county in train_counties]
     val_datasets = [CensusDataset(county) for county in args.val_county]
     

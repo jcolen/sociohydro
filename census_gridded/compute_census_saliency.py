@@ -23,7 +23,7 @@ def compute_saliency(model, dataset, device, savename):
             del ds['G_S']
         
         ds.create_dataset('X', data=dataset.x) # REMEMBER TO SUBTRACT MEAN TO ALIGN
-        ds.create_dataset('Y', data=dataset.y)
+        ds.create_dataset('Y', data=dataset.y) # ACROSS MULTIPLE COUNTIES
 
         gs = ds.require_group('G_S')
 

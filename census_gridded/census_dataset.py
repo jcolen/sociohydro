@@ -44,7 +44,7 @@ class CensusDataset(torch.utils.data.Dataset):
 
         # Apply smoothing filter
         arr = gaussian_filter(arr, sigma=self.sigma)
-        arr[msk] = np.nan # Reapply county boundary
+        arr[msk] = np.nan # Reapply masked or NaN points
 
         return arr
     

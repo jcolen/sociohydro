@@ -1,0 +1,25 @@
+{
+  "n_epochs": 100,
+  "batch_size": 8,
+  "val_county": [
+    "Georgia_Fulton",
+    "Illinois_Cook",
+    "Texas_Harris",
+    "California_Los Angeles"
+  ],
+  "val_tmax": 10,
+  "model_id": "3067270_8",
+  "train_set_seed": 8,
+  "num_train_counties": 8,
+  "use_all_counties": false,
+  "train_county": [
+    "Texas_Bexar",
+    "Pennsylvania_Allegheny",
+    "Washington_King",
+    "New York_Suffolk",
+    "Nevada_Clark",
+    "Virginia_Fairfax",
+    "California_Santa Clara",
+    "Florida_Broward"
+  ]
+}

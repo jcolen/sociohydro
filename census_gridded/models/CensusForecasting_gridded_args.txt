@@ -7,8 +7,8 @@
     "Texas_Harris",
     "California_Los Angeles"
   ],
-  "val_tmax": 10,
+  "val_tmax": 40,
   "model_id": "gridded",
   "random_seed": 0,
-  "num_train_counties": 8
+  "num_train_counties": 0
 }

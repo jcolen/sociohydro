@@ -74,7 +74,7 @@ class CensusForecasting(nn.Module):
 
         # To be applied before nearest-neighbor interpolation on the mesh
         self.training_blur = transforms.GaussianBlur(kernel_size=self.kernel_size, sigma=(0.1, 3))
-        self.inference_blur = transforms.GaussianBlur(kernel_size=self.kernel_size, sigma=1.5)
+        self.inference_blur = transforms.GaussianBlur(kernel_size=self.kernel_size, sigma=1.) #1.5 for model_id=gridded
     
     def batch_step(self, batch, device):
         wb = batch['wb'].to(device)
