@@ -14,9 +14,14 @@ dependencies:
   - matplotlib
   - h5py
   - opencv
+  - geopandas
+  - fipy
   - pip
   - pip:
     - dolfin-adjoint==2019.1.0
     - jupyterlab
     - pygmsh
     - tqdm
+    - rasterio
+    - git+https://github.com/lab-of-living-matter/freqent.git@epf_paper
+
