@@ -112,19 +112,26 @@ class StackInputsTargets:
 
 class ToTensor:
     """ Compute relevant numpy objects into torch tensors """
-    def __init__(self, convert_keys=['inputs', 'targets', 'features']):
+    def __init__(self, convert_keys=['inputs', 'targets', 'features', 'X', 'Y'], remove_extra=False):
         self.convert_keys = convert_keys
+        self.remove_extra = remove_extra
 
     def __call__(self, sample):
         for key in self.convert_keys:
             sample[key] = torch.FloatTensor(sample[key])
+
+        # Optionally remove extra elements to play nice with dataloader
+        if self.remove_extra:
+            to_remove = [key for key in sample if not key in self.convert_keys]
+            for key in to_remove:
+                sample.pop(key)
         
         return sample
 
 
 class FipyDataset(Dataset):
     """ Dataset that loads and transforms data from fipy """
-    def __init__(self, path="./data/Georgia_Fulton_small/fipy_output", grid=False):
+    def __init__(self, path="./data/Georgia_Fulton_small/fipy_output", grid=False, remove_extra=True):
         """ Initialize dataset. Kwargs "grid" indicates whether grid interpolation is performed """
         self.files = sorted(glob(os.path.join(path, "*.fipy")))
         self.transform = Compose([
@@ -132,7 +139,7 @@ class FipyDataset(Dataset):
             InterpolateToGrid() if grid else MeshToNumpyArray(),
             ComputeDerivative(),
             StackInputsTargets(),
-            ToTensor(),
+            ToTensor(remove_extra=remove_extra),
         ])
     
     def __len__(self):
