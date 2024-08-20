@@ -10,18 +10,18 @@ from scipy.interpolate import griddata
 
 from fvm_utils import calc_gradients
 
-class ComputeGradients:
-    """ Compute and return the sociohydrodynamic gradients """
-    def __init__(self, gradients='sociohydro'):
-        """ gradients = ['sociohydro', 'all'] specifies which grouping to use """
-        self.gradients = gradients
+class ComputeFeatures:
+    """ Compute and return the features composed of sociohydrodynamic gradients """
+    def __init__(self, features='sociohydro'):
+        """ features = ['sociohydro', 'all'] specifies which grouping to use """
+        self.features = features
 
     def __call__(self, sample):
-        all_gradients, sociohydro_gradients = calc_gradients(sample['W0_mesh'], sample['B0_mesh'])
-        if self.gradients == 'all':
-            sample['gradients_mesh'] = [all_gradients, all_gradients]
-        elif self.gradients == 'sociohydro':
-            sample['gradients_mesh'] = sociohydro_gradients
+        all_features, sociohydro_features = calc_gradients(sample['W0_mesh'], sample['B0_mesh'])
+        if self.features == 'all':
+            sample['features_mesh'] = [all_features, all_features]
+        elif self.features == 'sociohydro':
+            sample['features_mesh'] = sociohydro_features
         
         return sample
 
@@ -59,12 +59,12 @@ class InterpolateToGrid:
         sample['W1'] = self.interpolate_fipy(sample['W1_mesh'], X, Y)
         sample['B1'] = self.interpolate_fipy(sample['B1_mesh'], X, Y)
 
-        # Interpolate and stack gradients
-        gradients = [
-            [self.interpolate_fipy(grad, X, Y) for grad in sample['gradients_mesh'][0]],
-            [self.interpolate_fipy(grad, X, Y) for grad in sample['gradients_mesh'][1]]
+        # Interpolate and stack features
+        features = [
+            [self.interpolate_fipy(grad, X, Y) for grad in sample['features_mesh'][0]],
+            [self.interpolate_fipy(grad, X, Y) for grad in sample['features_mesh'][1]]
         ]
-        sample['gradients'] = np.asarray(gradients)
+        sample['features'] = np.asarray(features)
 
         return sample
 
@@ -86,12 +86,12 @@ class MeshToNumpyArray:
         sample['W1'] = sample['W1_mesh'].value
         sample['B1'] = sample['B1_mesh'].value
 
-        # Stack gradients
-        gradients = [
-            [grad.value for grad in sample['gradients_mesh'][0]],
-            [grad.value for grad in sample['gradients_mesh'][1]]
+        # Stack features
+        features = [
+            [grad.value for grad in sample['features_mesh'][0]],
+            [grad.value for grad in sample['features_mesh'][1]]
         ]
-        sample['gradients'] = np.asarray(gradients)
+        sample['features'] = np.asarray(features)
 
         return sample
 
@@ -103,13 +103,21 @@ class ComputeDerivative:
         sample['dt_B'] = (sample['B1'] - sample['B0']) / (sample['t1'] - sample['t0'])
         return sample
 
-class ToTensor:
-    """ Compute numpy objects into torch tensors """
+class StackInputsTargets:
+    """ Group the inputs and targets (W0, B0, dtW, dtB) into terms for NN processing """
     def __call__(self, sample):
-        for key in sample:
-            if isinstance(sample[key], np.ndarray):
-                #print(f'Converting {key} to torch FloatTensor with shape {sample[key].shape}')
-                sample[key] = torch.FloatTensor(sample[key])
+        sample['inputs'] = np.stack([sample['W0'], sample['B0']])
+        sample['targets'] = np.stack([sample['dt_W'], sample['dt_B']])
+        return sample
+
+class ToTensor:
+    """ Compute relevant numpy objects into torch tensors """
+    def __init__(self, convert_keys=['inputs', 'targets', 'features']):
+        self.convert_keys = convert_keys
+
+    def __call__(self, sample):
+        for key in self.convert_keys:
+            sample[key] = torch.FloatTensor(sample[key])
         
         return sample
 
@@ -120,9 +128,10 @@ class FipyDataset(Dataset):
         """ Initialize dataset. Kwargs "grid" indicates whether grid interpolation is performed """
         self.files = sorted(glob(os.path.join(path, "*.fipy")))
         self.transform = Compose([
-            ComputeGradients(),
+            ComputeFeatures(),
             InterpolateToGrid() if grid else MeshToNumpyArray(),
             ComputeDerivative(),
+            StackInputsTargets(),
             ToTensor(),
         ])
     
