@@ -98,9 +98,9 @@ class ParameterNetwork(nn.Module):
         output = feature_terms + growth
 
         if batched:
-            return output
+            return output, (feature_terms, growth)
         else:
-            return output[0]
+            return output[0], (feature_terms[0], growth[0])
 
 class SociohydroParameterNetwork(ParameterNetwork):
     """ Extension of parameter network using grouped sociohydrodynamic terms """

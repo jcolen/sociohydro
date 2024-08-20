@@ -5,4 +5,4 @@ county: Georgia_Fulton
 epochs: 100
 grid: false
 scheduler_step: 0.98
-val_split: 0.2
+val_split: 0.5

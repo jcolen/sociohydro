@@ -7,6 +7,7 @@ import numpy as np
 from glob import glob
 from fipy.tools.dump import read
 from scipy.interpolate import griddata
+from time import time
 
 from fvm_utils import calc_gradients
 
@@ -131,7 +132,11 @@ class ToTensor:
 
 class FipyDataset(Dataset):
     """ Dataset that loads and transforms data from fipy """
-    def __init__(self, path="./data/Georgia_Fulton_small/fipy_output", grid=False, remove_extra=True):
+    def __init__(self, 
+                 path="./data/Georgia_Fulton_small/fipy_output", 
+                 grid=False, 
+                 remove_extra=True,
+                 preload=False):
         """ Initialize dataset. Kwargs "grid" indicates whether grid interpolation is performed """
         self.files = sorted(glob(os.path.join(path, "*.fipy")))
         self.transform = Compose([
@@ -141,13 +146,28 @@ class FipyDataset(Dataset):
             StackInputsTargets(),
             ToTensor(remove_extra=remove_extra),
         ])
+
+        if preload:
+            print('Pre-loading all Fipy data from files')
+            t = time()
+            self.data = []
+            for file in self.files:
+                self.data.append(read(file))
+            print(f'Done (t = {time()-t:.1f} s)')
+        else:
+            print('Fipy data files will be read in at runtime')
+            self.data = None
     
     def __len__(self):
         return len(self.files) - 1
 
     def __getitem__(self, idx):
-        W0, B0, t0 = read(self.files[idx])
-        W1, B1, t1 = read(self.files[idx+1])
+        if self.data:
+            W0, B0, t0 = self.data[idx]
+            W1, B1, t1 = self.data[idx+1]
+        else:
+            W0, B0, t0 = read(self.files[idx])
+            W1, B1, t1 = read(self.files[idx+1])
 
         sample = {
             'W0_mesh': W0,
