@@ -125,6 +125,7 @@ if __name__ == '__main__':
     parser.add_argument('--epochs', type=int, default=100)
     parser.add_argument('--batch_size', type=int, default=32)
     parser.add_argument('--grid', action='store_true')
+    parser.add_argument('--grouped', action='store_true')
     parser.add_argument('--county', type=str, default='Georgia_Fulton')
     parser.add_argument('--coef_lr', type=float, default=1e-1)
     parser.add_argument('--base_lr', type=float, default=3e-4)
@@ -138,7 +139,10 @@ if __name__ == '__main__':
     print('Using device:', device)
 
     # Initialize the model
-    model = SociohydroParameterNetwork(grid=args.grid).to(device)
+    model = SociohydroParameterNetwork(
+        grid=args.grid, 
+        grouped=args.grouped
+    ).to(device)
 
     # Initialize optimizer and learning rate scheduler
     loss_func = JointLossFunction(alpha=args.alpha, beta=args.beta)

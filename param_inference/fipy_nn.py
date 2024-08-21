@@ -15,6 +15,7 @@ class ParameterNetwork(nn.Module):
                  num_coefs=7,
                  num_hidden=64,
                  num_layers=2,
+                 grouped=False,
                  grid=False,
                  labels=None,
                  features=None):
@@ -25,6 +26,7 @@ class ParameterNetwork(nn.Module):
         self.num_coefs = 7
         self.num_hidden = num_hidden
         self.num_layers = num_layers
+        self.grouped = grouped
         self.grid = grid
 
         # What do we call the things that we predict
@@ -47,16 +49,17 @@ class ParameterNetwork(nn.Module):
 
         # Initialize local neural network
         conv_block = nn.Conv2d if grid else nn.Conv1d
+        kwargs = {'kernel_size': 1, 'groups': num_classes if grouped else 1}
         layers = []
         for i in range(num_layers):
             layers.append(conv_block(
                 num_classes if i == 0 else num_hidden,
                 num_hidden,
-                kernel_size=1
+                **kwargs
             ))
             layers.append(Sin())
 
-        layers.append(conv_block(num_hidden, num_classes, kernel_size=1))
+        layers.append(conv_block(num_hidden, num_classes, **kwargs))
         self.local_network = nn.Sequential(*layers)
     
     def get_coefs(self):
@@ -106,7 +109,8 @@ class SociohydroParameterNetwork(ParameterNetwork):
     """ Extension of parameter network using grouped sociohydrodynamic terms """
     def __init__(self, 
                  num_hidden=64, 
-                 num_layers=2, 
+                 num_layers=2,
+                 grouped=False,
                  grid=False):
         """ Using the proposed equations, we always have 7 coefficients per class """
         num_classes = 2
@@ -122,7 +126,8 @@ class SociohydroParameterNetwork(ParameterNetwork):
             num_classes=num_classes, 
             num_coefs=num_coefs, 
             num_hidden=num_hidden, 
-            num_layers=num_layers, 
+            num_layers=num_layers,
+            grouped=grouped,
             grid=grid,
             labels=labels,
             features=features
