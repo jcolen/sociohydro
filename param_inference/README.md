@@ -25,7 +25,8 @@ These follow the structure of the other ML subdirectories within this repo
 - `fipy_dataset.py` - defines data loading and transformation
 - `fipy_nn.py` - defines the hybrid neural network models for parameter inference
 - `train_fipy_nn.py` - defines the training loop
-- `HybridInferenceTesting.py` - tests each module and will eventually contain analysis of trained models
+- `HybridInferenceTesting.ipynb` - tests each module and roughly shows how it works
+- `HybridInferenceAnalysis.ipynb` - demonstrates the analysis pipeline for trained models
 
 Training a model can be done with the command `python train_fipy_nn.py`. 
 The default configuration uses the "sociohydrodynamic" grouped terms and applies them to Fulton County, GA.
