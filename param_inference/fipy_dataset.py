@@ -100,8 +100,8 @@ class MeshToNumpyArray:
 class ComputeDerivative:
     """ Compute the discrete time derivative using forward differences """
     def __call__(self, sample):
-        sample['dt_W'] = (sample['W1'] - sample['W0']) / (sample['t1'] - sample['t0'])
-        sample['dt_B'] = (sample['B1'] - sample['B0']) / (sample['t1'] - sample['t0'])
+        sample['dt_W'] = sample["W0_mesh"].mesh._cellVolumes * (sample['W1'] - sample['W0']) / (sample['t1'] - sample['t0'])
+        sample['dt_B'] = sample["B0_mesh"].mesh._cellVolumes * (sample['B1'] - sample['B0']) / (sample['t1'] - sample['t0'])
         return sample
 
 class StackInputsTargets:
