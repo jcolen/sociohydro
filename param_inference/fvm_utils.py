@@ -15,8 +15,8 @@ def get_boundary(gdf):
     """
     return GeoDataFrame with just boundary of a given GeoDataFrame
     """
-    boundary = gpd.GeoDataFrame([gdf.unary_union])
-    boundary.geometry = boundary[0]
+    boundary = gpd.GeoDataFrame([gdf.unary_union],
+                                geometry=[gdf.unary_union])
     boundary.crs = gdf.crs
 
     return boundary
@@ -256,7 +256,8 @@ def dump(datafile, group_name, datadict):
 def plot_mesh(data, mesh, ax,
               cmap=plt.cm.viridis,
               vmin=None, vmax=None,
-              colorbar=True):
+              colorbar=True,
+              colorbar_title=""):
     
     xmin, ymin = mesh.extents["min"]
     xmax, ymax = mesh.extents["max"]
@@ -271,13 +272,13 @@ def plot_mesh(data, mesh, ax,
     ax.set_aspect(1)
 
     if colorbar:
-        sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm)
+        sm = plt.cm.ScalarMappable(norm=norm, cmap=cmap)
         vmin, vmax = sm.get_clim()
+        vmean = (vmin + vmax)/2
         cax = ax.inset_axes([1.05, 0, 0.05, 1])
-        plt.colorbar(sm, cax=cax, ax=ax,
-                     ticks=[vmin,
-                            (vmax+vmin)/2,
-                            vmax])
+        cbar = plt.colorbar(sm, cax=cax, ax=ax,
+                            ticks=[vmin, vmean, vmax])
+        cbar.ax.set_ylabel(colorbar_title, rotation=-90)
 
 
 def build_term_value(term, solver): 
