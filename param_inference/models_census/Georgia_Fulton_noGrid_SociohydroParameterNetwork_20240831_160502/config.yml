@@ -1,0 +1,15 @@
+alpha: 1.0
+base_lr: 0.0003
+batch_size: 32
+beta: 1.0
+coef_lr: 0.1
+county: Georgia_Fulton
+datafolder: /project/vitelli/dsseara/schelling/data/yearly/raw/meshed
+epochs: 100
+grid: false
+grouped: false
+region: all
+savefolder: models_census
+scheduler_step: 0.98
+sigma: 10.0
+val_split: 0.5
