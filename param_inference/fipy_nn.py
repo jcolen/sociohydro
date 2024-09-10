@@ -140,3 +140,100 @@ class SociohydroParameterNetwork(ParameterNetwork):
         coefs[:, 1:6] = self.coefs[:, 1:6]
         coefs[:, 6] = -self.coefs[:, 6].exp() # Gamma must be NEGATIVE (for stability)
         return coefs
+
+class LocalCoefficientsParameterNetwork(ParameterNetwork):
+    """ Extension of parameter network to allow coefficients that are local functions of phi """
+    def __init__(self, 
+                 num_coefs=7,
+                 num_hidden=64,
+                 num_layers=2,
+                 grouped=False,
+                 grid=False,
+                 features=None):
+        """ You may want to hardcode features depending on what this expects to get
+            from fvm_utils.calc_gradients
+            I've hardcoded num_classes to allow for gradient computation
+        """
+        num_classes = 2
+        labels = ['ϕW', 'ϕB']
+
+        super().__init__(
+            num_classes=num_classes, 
+            num_coefs=num_coefs, 
+            num_hidden=num_hidden, 
+            num_layers=num_layers,
+            grouped=grouped,
+            grid=grid,
+            labels=labels,
+            features=features
+        )
+
+        # Replace the last layer to allow multiple local functions of inputs
+        conv_block = nn.Conv2d if grid else nn.Conv1d
+        kwargs = {'kernel_size': 1, 'groups': num_classes if grouped else 1}
+        last_layer = conv_block(num_hidden, num_classes * (num_coefs + 1), **kwargs)
+
+        local_layers = list(self.local_network.children())[:-1]
+        self.local_network = nn.Sequential(*local_layers, last_layer)
+
+    def forward(self, inputs, features, batched=False):
+        """ Apply the local coefficients to features and the neural network to inputs
+            inputs - variables of size [B, Nc, ...]
+            features - variables of size [B, Nc, Nf, ...]
+            batched - set to False if there is no leading batch dimension
+        """
+    
+        if not batched:
+            inputs = inputs[None]
+            features = features[None]
+
+        # Get shape
+        b = inputs.shape[0]
+        c = inputs.shape[1]
+        f = features.shape[2]
+        hwl = inputs.shape[2:]
+
+        # Ensure inputs require grad so we can take a gradient
+        ϕW = inputs[:, 0].clone().detach().requires_grad_(True)
+        ϕB = inputs[:, 1].clone().detach().requires_grad_(True)
+        inp = torch.stack([ϕW, ϕB], dim=1)
+
+        # Compute terms and coefs as local features
+        local_features = self.local_network(inp) #[b, c*(f+1), ...]
+        local_features = local_features.reshape([b, c, f+1, *hwl])
+
+        coefs = local_features[:, :, :-1] #[b, c, f, ...]
+        growth = local_features[:, :, -1] #[b, c, ...]
+
+        # Compute second derivative of coefs w.r.t. phi
+        def grad_func(output, input, **kwargs):
+            grad_outputs = torch.ones_like(input)
+            kwargs = dict(grad_outputs=grad_outputs, **kwargs)
+
+            grad = []
+            for cc in range(output.shape[1]):
+                gcc = []
+                for ff in range(output.shape[2]):
+                    gcc.append(torch.autograd.grad(output[:, cc, ff], input, **kwargs)[0])
+                grad.append(torch.stack(gcc, dim=1))
+            
+            grad = torch.stack(grad, dim=1)
+            return grad
+
+        c_W = grad_func(coefs, ϕW, create_graph=True)
+        c_B = grad_func(coefs, ϕB, create_graph=True)
+        c_WW = grad_func(c_W, ϕW, retain_graph=True)
+        c_WB = grad_func(c_W, ϕB, retain_graph=True)
+        c_BW = grad_func(c_B, ϕW, retain_graph=True)
+        c_BB = grad_func(c_B, ϕB, retain_graph=True)
+
+        # Aggregate feature terms
+        feature_terms = coefs * features
+        feature_terms = feature_terms.sum(dim=2) #[b, c, ...]
+
+        output = feature_terms * growth
+
+        if batched:
+            return output, (feature_terms, growth)
+        else:
+            return output[0], (feature_terms[0], growth[0])

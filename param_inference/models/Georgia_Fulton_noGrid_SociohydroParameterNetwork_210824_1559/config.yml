@@ -1,0 +1,11 @@
+alpha: 0.0
+base_lr: 0.0003
+batch_size: 32
+beta: 1.0
+coef_lr: 0.1
+county: Georgia_Fulton
+epochs: 100
+grid: false
+grouped: true
+scheduler_step: 0.98
+val_split: 0.5
