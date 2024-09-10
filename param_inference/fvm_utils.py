@@ -5,7 +5,7 @@ import pandas as pd
 from rasterio import features, transform
 import fipy as fp
 import h5py
-from scipy import ndimage, optimize
+from scipy import ndimage, optimize, spatial
 import matplotlib.pyplot as plt
 import matplotlib as mpl
 from matplotlib import collections
@@ -15,8 +15,8 @@ def get_boundary(gdf):
     """
     return GeoDataFrame with just boundary of a given GeoDataFrame
     """
-    boundary = gpd.GeoDataFrame([gdf.unary_union])
-    boundary.geometry = boundary[0]
+    boundary = gpd.GeoDataFrame([gdf.unary_union],
+                                geometry=[gdf.unary_union])
     boundary.crs = gdf.crs
 
     return boundary
@@ -185,6 +185,20 @@ def get_capacity(file, region="all", method="wb"):
         return capacity
 
 
+def gaussian_blur_mesh(var, sigma=1, dist_mat=None):
+    x, y = var.mesh.cellCenters
+    f = var.value
+    
+    if dist_mat is None:
+        coords = np.stack([x, y], axis=1)
+        dist_mat = spatial.distance_matrix(coords, coords) 
+        
+    weights = np.exp(-dist_mat**2 / (2 * sigma))
+    weights /= weights.sum(axis=1, keepdims=True)
+    f_smooth = np.dot(weights, f)
+    return fp.CellVariable(mesh=var.mesh, value=f_smooth)
+
+
 def nansmooth(arr, sigma=1):
     """
     Apply a gaussian filter to an array with nans.
@@ -256,7 +270,8 @@ def dump(datafile, group_name, datadict):
 def plot_mesh(data, mesh, ax,
               cmap=plt.cm.viridis,
               vmin=None, vmax=None,
-              colorbar=True):
+              colorbar=True,
+              colorbar_title=""):
     
     xmin, ymin = mesh.extents["min"]
     xmax, ymax = mesh.extents["max"]
@@ -271,8 +286,13 @@ def plot_mesh(data, mesh, ax,
     ax.set_aspect(1)
 
     if colorbar:
-        sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm)
-        plt.colorbar(sm, ax=ax, ticks=[vmin, vmin+0.5*(vmax-vmin), vmax])
+        sm = plt.cm.ScalarMappable(norm=norm, cmap=cmap)
+        vmin, vmax = sm.get_clim()
+        vmean = (vmin + vmax)/2
+        cax = ax.inset_axes([1.05, 0, 0.05, 1])
+        cbar = plt.colorbar(sm, cax=cax, ax=ax,
+                            ticks=[vmin, vmean, vmax])
+        cbar.ax.set_ylabel(colorbar_title, rotation=-90)
 
 
 def build_term_value(term, solver): 

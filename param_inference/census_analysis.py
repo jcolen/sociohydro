@@ -14,7 +14,7 @@ from sklearn.linear_model import LinearRegression
 from argparse import ArgumentParser
 
 from fipy_nn import SociohydroParameterNetwork
-from fipy_dataset import FipyDataset
+from census_dataset import CensusDataset
 from fvm_utils import plot_mesh
 
 
@@ -209,154 +209,6 @@ def plot_growth_model(model, device, N=10, vmax=0.02, model_dir=None, printout=F
         fig.savefig(f'{model_dir}/growth_model.png', bbox_inches='tight')
 
 
-def compare_coefficients(model, config, model_dir=None, printout=False):
-    # Load exact parameters
-    paramfile = f"./data/{config['county']}_small/{config['county']}_small_NYCinferredParams_params.json"
-    with open(paramfile) as f:
-        params = json.load(f)
-
-    term_names = [
-        r'$T_i$',
-        r'$\Gamma_i$',
-        r'$\nu_{iii}$',
-        r'$\nu_{iij}$',
-        r'$\nu_{ijj}$',
-        r'$k_{ii}$',
-        r'$k_{ij}$'
-    ]
-    
-    coefW = [
-        params['tempW'],
-        params['gammaW'],
-        params['nuWWW'],
-        params['nuWWB'],
-        params['nuWBB'],
-        params['kWW'],
-        params['kWB']
-    ]
-
-    coefB = [
-        params['tempB'],
-        params['gammaB'],
-        params['nuBBB'],
-        params['nuBWB'],
-        params['nuBWW'],
-        params['kBB'],
-        params['kBW']
-    ]
-    
-
-    # Put everything into a dataframe
-    
-    W_df = pd.DataFrame({
-        'term':  term_names,
-        'coef': coefW,
-    })
-    W_df['target'] = 'White'
-
-    B_df = pd.DataFrame({
-        'term':  term_names,
-        'coef': coefB,
-    }) 
-    B_df['target'] = 'Black'
-
-    true_df = pd.concat([W_df, B_df])
-
-    # Collect NN parameters
-    with torch.no_grad():
-        coefs = model.get_coefs().detach().cpu().numpy()
-
-    # Put everything into a dataframe
-    W_df = pd.DataFrame({
-        'term':  term_names,
-        'coef': -coefs[0, [0, 6, 3, 4, 5, 1, 2]],
-    })
-    W_df.loc[0, 'coef'] *= -1
-    W_df['target'] = 'White'
-
-    B_df = pd.DataFrame({
-        'term':  term_names,
-        'coef': -coefs[1, [0, 6, 3, 4, 5, 1, 2]],
-    })
-    B_df.loc[0, 'coef'] *= -1
-    B_df['target'] = 'Black'
-
-    ml_df = pd.concat([W_df, B_df])
-
-    #Put it all together and plot
-    total_df = pd.concat([true_df, ml_df])
-
-    fig, ax = plt.subplots(1, 1, dpi=144, figsize=(6, 3))
-    sns.stripplot(
-        data=true_df,
-        x='term',
-        y='coef',
-        hue='target',
-        palette=['steelblue', 'firebrick'],
-        dodge=True,
-        s=10, marker='o',
-        ax=ax,
-    )
-    sns.move_legend(ax, loc='center left', bbox_to_anchor=[1.1, 0.75], 
-                    framealpha=0., title='Exact', fontsize=8)
-
-    ax2 = ax.twinx()
-    sns.stripplot(
-        data=ml_df,
-        x='term',
-        y='coef',
-        hue='target',
-        palette=['steelblue', 'firebrick'],
-        dodge=True,
-        s=10, marker='s',
-        ax=ax2,
-    )
-    sns.move_legend(ax2, loc='center left', bbox_to_anchor=[1.1, 0.25], 
-                    framealpha=0., title='Inferred', fontsize=8)
-
-
-    ax.axhline(0, color='grey', linestyle='--', zorder=-1)
-    ax.set(ylim=[-35, 35], yticks=[-30, 0, 30], ylabel='Coefficient', xlabel='Term')
-    ylim = np.ceil(np.max(np.abs(ml_df.coef)))
-    ax2.set(ylim=[-ylim, ylim], yticks=[-ylim, 0, ylim], ylabel=None);
-
-    # Collect and save information
-    joint_df = pd.concat([ml_df.assign(source='Inferred'), true_df.assign(source='Exact')])
-    joint_df = joint_df.pivot(columns='source', index=['target', 'term'], values='coef')
-
-    if printout:
-        print(joint_df)
-
-    if model_dir:
-        fig.savefig(f'{model_dir}/compare_coefficients.png', bbox_inches='tight')
-        joint_df.to_csv(f'{model_dir}/compare_coefficients.csv')
-
-    return joint_df
-
-
-def scatter_plot_coefficients(joint_df, model_dir=None, printout=False):
-    xmin, xmax = np.floor(np.min(joint_df.Exact)), np.ceil(np.max(joint_df.Exact))
-
-    fig, ax = plt.subplots(1, 1, dpi=150, figsize=(3, 3))
-
-    for target, c in zip(['White', 'Black'], ['steelblue', 'firebrick']):
-        x, y = joint_df.loc[target, 'Exact'], joint_df.loc[target, 'Inferred']
-        ax.scatter(x, y, c=c)
-
-        fitter = LinearRegression().fit(x.values[:, None], y.values[:, None])
-        m, b = fitter.coef_.squeeze(), fitter.intercept_.squeeze()
-        xx = np.array([xmin, xmax])[:, None]
-        yy = fitter.predict(xx)
-        ax.plot(xx, yy, c=c, label=f'{target}, y = {m:.02f} x + {b:.02f}')
-        
-    ax.legend(loc='lower right', framealpha=0, fontsize=8, handlelength=1)
-    ax.set(xlabel='True coefficients', ylabel='Inferred coefficients')
-    ax.tick_params(which='both', direction='in')
-
-    if model_dir:
-        fig.savefig(f'{model_dir}/scatter_coefficients.png', bbox_inches='tight')
-
-
 def load_model(model_dir, printout=True):
     with open(f"{model_dir}/config.yml", "r") as f:
         config = yaml.safe_load(f)
@@ -409,14 +261,19 @@ def analysis_pipeline(model_dir,
     config, info, device, model = load_model(model_dir, printout=printout)
     
     # Generate sample prediction
-    dataset = FipyDataset(path=f"./data/{county}_small/fipy_output",
-                          grid=config['grid'],
-                          remove_extra=False)
-    sample = dataset[100]
+    dataset = CensusDataset(path=os.path.join(config["datafolder"],
+                                              config["county"]),
+                            grid=config['grid'],
+                            remove_extra=False,
+                            preload=True,
+                            region=config["region"],
+                            sigma=config["sigma"])
+    sample = dataset[10]
 
     with torch.no_grad():
-        outputs, (feature_terms, growth)= model(
-            sample['inputs'].to(device), sample['features'].to(device), batched=False)
+        outputs, (feature_terms, growth)= model(sample['inputs'].to(device), 
+                                                sample['features'].to(device),
+                                                batched=False)
 
         inputs = sample['inputs'].cpu().numpy()
         targets = sample['targets'].cpu().numpy()
@@ -447,15 +304,8 @@ def analysis_pipeline(model_dir,
                       model_dir=model_dir,
                       printout=printout)
     
-    joint_df = compare_coefficients(model, config,
-                                    model_dir=model_dir,
-                                    printout=printout)
     
-    scatter_plot_coefficients(joint_df,
-                              model_dir=model_dir,
-                              printout=printout)
-
-    return joint_df
+    return df
 
 if __name__=='__main__':
     parser = ArgumentParser()
