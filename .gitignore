@@ -1,4 +1,5 @@
 .ipynb_checkpoints
+jitfailure*
 validation
 *.h5
 *.swp

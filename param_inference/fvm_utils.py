@@ -272,14 +272,25 @@ def plot_mesh(data, mesh, ax,
               vmin=None, vmax=None,
               colorbar=True,
               colorbar_title=""):
+    if isinstance(mesh, fp.Gmsh2D):
+        coords = mesh.vertexCoords
+        cells = mesh._orderedCellVertexIDs
+        values = data.value
+    else:
+        # Dolfin mesh, stores values on vertices not faces
+        coords = mesh.coordinates().T
+        cells = mesh.cells().T
+        values = data[cells].mean(axis=0)
+
+    xmin, ymin = coords.min(axis=1)
+    xmax, ymax = coords.max(axis=1)
+
+    polygons = coords[:, cells]
+    polygons = np.moveaxis(polygons, (0, 1, 2), (2, 1, 0))
+    col = collections.PolyCollection(polygons)
     
-    xmin, ymin = mesh.extents["min"]
-    xmax, ymax = mesh.extents["max"]
-    
-    col = collections.PolyCollection(np.moveaxis(mesh.vertexCoords[:, mesh._orderedCellVertexIDs],
-                                                 (0, 1, 2), (2, 1, 0)))
     norm = mpl.colors.Normalize(vmin=vmin, vmax=vmax)
-    col.set_color(cmap(norm(data)))
+    col.set_color(cmap(norm(values)))
     ax.add_collection(col)
     ax.set(xlim=[xmin, xmax],
            ylim=[ymin, ymax])
