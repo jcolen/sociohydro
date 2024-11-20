@@ -1,146 +1,193 @@
-import numpy as np
 import os
 import glob
 import torch
+import torch.nn.functional as F
 import json
-from tqdm.auto import tqdm
+import yaml
+import numpy as np
+
 from argparse import ArgumentParser
+from time import time
 
-from census_dataset import *
-from census_nn import *
+from census_dataset import CensusDataset
+import census_nn
 
-def train(model, train_dataset, val_dataset, n_epochs, batch_size, device, savename):
-    '''
-    Train a model
-    '''
-    opt = torch.optim.Adam(model.parameters(), lr=3e-4)
-    sch = torch.optim.lr_scheduler.ExponentialLR(opt, gamma=0.98)
+import logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
+
+def run_training(model, 
+                 train_dataset, 
+                 val_dataset, 
+                 optimizer, 
+                 scheduler,
+                 save_dir, 
+                 n_epochs=100,
+                 batch_size=8):
+    """ Train a model """
+    if torch.cuda.is_available():
+        device = torch.device('cuda:0')
+    elif torch.backends.mps.is_available():
+        device = torch.device('mps')
+    else:
+        device = torch.device('cpu')
+
+    model.to(device)
+
     step = 0
     best_loss = 1e10
     best_epoch = 0
 
     idxs = np.arange(len(train_dataset), dtype=int)
-    
-    with tqdm(total=n_epochs) as pbar:
-        for epoch in range(n_epochs):
-            model.train()
-            train_loss = np.zeros(len(train_dataset))
-            np.random.shuffle(idxs)
+    logger.info('Starting to train')
+    for epoch in range(n_epochs):
+        model.train()
+        train_loss = 0.
+        np.random.shuffle(idxs)
+        t = time()
 
-            # Training loop
-            for i in tqdm(range(len(train_dataset)), leave=False):
-                batch = train_dataset[idxs[i]]
+        # Training loop
+        for i in range(len(train_dataset)):
+            batch = train_dataset[idxs[i]]
+            wb = batch['wb'].to(device) #Shape [2, 2, H, W]
+            housing = batch['housing'][None, None].to(device) # Some models use housing
+            mask = batch['mask'] # Only use points in county for loss
+
+            wb[wb.isnan()] = 0.
+            housing[housing.isnan()] = 0.
+
+            wbNN = wb[0:1] + batch['dt'] * model(wb[0:1], housing=housing)
+            loss = F.l1_loss(wbNN[:, :,mask], wb[1:2,:,mask])
+
+            loss.backward()
+            train_loss += loss.item()
+            step += 1
+
+            if step % batch_size == 0:
+                optimizer.step()
+                optimizer.zero_grad()
+
+        train_loss = train_loss / len(train_dataset)
+
+        val_loss = 0.
+        model.eval()
+
+        # Our evaluation metric is the forecasting error over the full county time series
+        with torch.no_grad():
+            for dataset in val_dataset.datasets:
+                batch = dataset[0]
                 wb = batch['wb'].to(device)
+                housing = batch['housing'][None, None].to(device) # Some models use housing
+
                 wb[wb.isnan()] = 0.
+                housing[housing.isnan()] = 0.
+
                 mask = batch['mask'] # Only use points in county for loss
 
-                wbNN = wb[0] + batch['dt'] * model(wb[0:1])[0]
-                loss = F.l1_loss(wbNN[:,mask], wb[1,:,mask])
+                wbNN = model.simulate(wb[0:1], n_steps=wb.shape[0]-1, dt=batch['dt'], housing=housing)[0]
+                val_loss += (wbNN[-1,:,mask]-wb[-1,:,mask]).pow(2).sum(0).mean().item()
 
-                loss.backward()
-                train_loss[i] += loss.item()
-                step += 1
+        scheduler.step()
+        logger.info(f'Epoch {epoch}\tTrain Loss = {train_loss:.3g}\tVal Loss = {val_loss:.3g}\t{time()-t:.3g} s')
 
-                if step % batch_size == 0:
-                    opt.step()
-                    opt.zero_grad()
+        # Save if the model showed an improvement
+        if val_loss <= best_loss:
+            save_dict = {
+                'state_dict': model.state_dict(),
+                'train_loss': train_loss,
+                'val_loss': val_loss
+            }
+            torch.save(save_dict, f'{save_dir}/model_weight.ckpt')
+            best_loss = val_loss
+            best_epoch = epoch
+        
+        # Early stopping if the model is no longer improving
+        if epoch - best_epoch > 20:
+            return
 
-            val_loss = 0.
-            model.eval()
 
-            # Our evaluation metric is the forecasting error over the full county time series
-            with torch.no_grad():
-                for dataset in tqdm(val_dataset.datasets, leave=False):
-                    batch = dataset[0]
-                    wb = batch['wb'].to(device)
-                    wb[wb.isnan()] = 0.
-                    mask = batch['mask'] # Only use points in county for loss
-
-                    wbNN = model.simulate(wb[0:1], n_steps=wb.shape[0]-1, dt=batch['dt'])[0]
-                    val_loss += (wbNN[-1,:,mask]-wb[-1,:,mask]).pow(2).sum(0).mean().item()
-
-            # Save if the model showed an improvement
-            if val_loss <= best_loss:
-                torch.save(
-                    {
-                        'state_dict': model.state_dict(),
-                        'val_loss': val_loss,
-                        'train_loss': np.mean(train_loss),
-                    },
-                    f'{savename}.ckpt')
-                best_loss = val_loss
-                best_epoch = epoch
-            
-            # Early stopping if the model is no longer improving
-            if epoch - best_epoch > 20:
-                return
-
-            sch.step()
-            pbar.update()
-            pbar.set_postfix(val_loss=val_loss, best_loss=best_loss)
-
-if __name__ == '__main__':
-    parser = ArgumentParser()
-    parser.add_argument('--n_epochs', type=int, default=100)
-    parser.add_argument('--batch_size', type=int, default=8)
-    parser.add_argument('--val_county', nargs='+', 
-        default=['Georgia_Fulton', 'Illinois_Cook', 'Texas_Harris', 'California_Los Angeles'])
-    parser.add_argument('--val_tmax', type=int, default=10)
-    parser.add_argument('--use_max_scaling', action='store_true')
-    parser.add_argument('--use_fill_frac', action='store_true')
-    parser.add_argument('--model_id', type=str, default='test')
-    args = parser.parse_args()
-
-    '''
-    # Legacy models in first draft had no train/test split
-    # This was used for CensusForecasting_gridded.ckpt
-    train_datasets = []
-    val_datasets = []
-    for county in args.val_county:
-        train_datasets.append(CensusDataset(county).training())
-        val_datasets.append(CensusDataset(county).validate())
-    '''
-
-    # In the revision, train on more counties
-    counties = [os.path.basename(c)[:-4] for c in glob.glob(
-        '/home/jcolen/data/sociohydro/decennial/revision/meshes/*.xml')]
-    counties = [c for c in counties if not 'San Bernardino' in c] # Too big, causes memory issues
-    train_counties = [c for c in counties if not c in args.val_county]
-
-    args.__dict__['num_train_counties'] = len(train_counties)
-    args.__dict__['train_county'] = list(train_counties)
-
-    dataset_kwargs = dict(
-        use_fill_frac=args.use_fill_frac,
-        use_max_scaling=args.use_max_scaling,
-    )
-
-    train_datasets = [CensusDataset(county, **dataset_kwargs).training() for county in train_counties]
-    val_datasets = [CensusDataset(county, **dataset_kwargs).validate() for county in args.val_county]
+def get_dataset(config, random_seed=42):
+    train_datasets = [CensusDataset(county, **config['kwargs']).training() for county in config['train_counties']]
+    val_datasets = [CensusDataset(county, **config['kwargs']).validate() for county in config['val_counties']]
     
     # Include first decade of Census data from Figure 3 counties
-    for county in args.val_county:
+    for county in config['val_counties']:
         train_datasets.append(torch.utils.data.Subset(
-            CensusDataset(county, **dataset_kwargs).training(), 
-            np.arange(0, args.val_tmax, dtype=int)
+            CensusDataset(county, **config['kwargs']).training(), 
+            np.arange(0, config['val_tmax'], dtype=int)
         ))
 
     train_dataset = torch.utils.data.ConcatDataset(train_datasets)
     val_dataset = torch.utils.data.ConcatDataset(val_datasets)
     
-    print(f'Training dataset length: {len(train_dataset)}')
-    print(f'Validation dataset length: {len(val_dataset)}')
+    logger.info(f'Training dataset length: {len(train_dataset)}')
+    logger.info(f'Validation dataset length: {len(val_dataset)}')
 
-    # Build model
-    device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
-    model = CensusForecasting().to(device)
+    return train_dataset, val_dataset
 
-    savename = f'models/{model.__class__.__name__}_{args.model_id}'
-    print(f'Saving information to {savename}')
-
-    with open(f'{savename}_args.txt', 'w') as f:
-        json.dump(args.__dict__, f, indent=2)
+def get_model(config):
+    class_type = eval(config['class_path'])
+    logger.info(f'Building a {class_type.__name__}')
+    model = class_type(**config['args'])
     
+    if 'weights' in config and config['weights'] is not None:
+        logger.info(f'Loading model weights from {config["weights"]}')
+        info = torch.load(config['weights'], map_location='cpu')
+        model.load_state_dict(info['state_dict'])
+
+        logger.info(f'Model reached loss={info["val_loss"]:.3g}')
+    
+    return model
+
+def get_optimizer_scheduler(config, model):
+    class_type = eval(config['optimizer']['class_path'])
+    logger.info(f'Building a {class_type.__name__}')
+    optimizer = class_type(model.parameters(), **config['optimizer']['args'])
+    if 'scheduler' in config:
+        class_type = eval(config['scheduler']['class_path'])
+        logger.info(f'Building a {class_type.__name__}')
+        scheduler = class_type(optimizer, **config['scheduler']['args'])
+    else:
+        logger.info('Proceeding with no learning rate scheduler')
+        scheduler = None
+    
+    return optimizer, scheduler
+
+
+if __name__ == '__main__':
+    parser = ArgumentParser()
+    parser.add_argument('--config', type=str, default='configs/absolute_density_no_housing.yaml')
+    parser.add_argument('--model_id', type=str, default='test')
+    args = parser.parse_args()
+
+    logger.info(f'Loading configuration from {args.config}')
+    with open(args.config) as file:
+        config = yaml.safe_load(file)
+
+    # Load model
+    model = get_model(config['model'])
+
+    # Load datasets
+    train_dataset, val_dataset = get_dataset(config['dataset'])
+
+    # Load optimizer and scheduler
+    optimizer, scheduler = get_optimizer_scheduler(config, model)
+
+    # Dump configuration with model weihgt save path
+    save_dir = f'models/{args.model_id}'
+    os.makedirs(save_dir, exist_ok=True)
+    logger.info(f'Saving information to {save_dir}')
+    config['model']['weights'] = f'{save_dir}/model_weight.ckpt'
+    with open(f'{save_dir}/config.yaml', 'w') as file:
+        yaml.dump(config, file)
+
     with torch.autograd.set_detect_anomaly(True):
-        train(model, train_dataset, val_dataset, 
-              args.n_epochs, args.batch_size, device, savename)
+        run_training(
+            model, 
+            train_dataset, 
+            val_dataset, 
+            optimizer,
+            scheduler,
+            save_dir=save_dir,
+            **config['training'])

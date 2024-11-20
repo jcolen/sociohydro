@@ -2,17 +2,23 @@ import numpy as np
 import os
 import glob
 import torch
-import json
+import yaml
 from pprint import pprint
 from argparse import ArgumentParser
 
-from census_dataset import *
-from census_nn import *
+from census_dataset import CensusDataset
+from train_census_nn import get_model
+import census_nn
 
 import h5py
 from tqdm.auto import trange, tqdm
 
-def compute_saliency(model, dataset, device, savename, aggregate=True):
+import logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
+
+def compute_saliency(model, dataset, device, save_dir):
     """ Modified compared to census_gridded/compute_census_saliency
         For storage purposes, just store GS_sum so we don't need to
         aggregate later for plotting. The h5 files are too big to git 
@@ -22,7 +28,7 @@ def compute_saliency(model, dataset, device, savename, aggregate=True):
         Aggregated saliency (what we plot): 4.7 MB
 
     """
-    with h5py.File(f'{savename}_aggregated_saliency.hdf5', 'a') as h5f:
+    with h5py.File(f'{save_dir}/aggregated_saliency.hdf5', 'a') as h5f:
         ds = h5f.require_group(dataset.county)
 
         if 'X' in ds:
@@ -40,13 +46,19 @@ def compute_saliency(model, dataset, device, savename, aggregate=True):
         wb = batch['wb'].to(device)
         wb[wb.isnan()] = 0.
 
+        if model.use_housing:
+            housing = torch.FloatTensor(dataset.housing).to(device)[None, None]
+            housing[housing.isnan()] = 0.
+        else:
+            housing = None
+
         nnz = np.asarray(np.nonzero(batch['mask'])).T
         
         for tt in tqdm(range(wb.shape[0])):
             # Select inputs at this time
             inputs = wb[tt:tt+1].clone()
             inputs.requires_grad = True
-            dt_wb = model(inputs) # [1, 2, H, W]
+            dt_wb = model(inputs, housing=housing) # [1, 2, H, W]
 
             # Select 100 points to compute saliency at
             np.random.shuffle(nnz)
@@ -79,29 +91,22 @@ def compute_saliency(model, dataset, device, savename, aggregate=True):
 if __name__ == '__main__':
     parser = ArgumentParser()
     parser.add_argument('--model_id', type=str, default='gridded')
-    parser.add_argument('--use_max_scaling', action='store_true')
-    parser.add_argument('--use_fill_frac', action='store_true')
     args = parser.parse_args()
 
+    # Load config
+    save_dir = f'models/{args.model_id}'
+    config_file = f'{save_dir}/config.yaml'
+    logger.info(f'Loading configuration from {config_file}')
+    with open(config_file) as file:
+        config = yaml.safe_load(file)
+
+    # Load model
     device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
-    model = CensusForecasting().to(device)
+    model = get_model(config['model']).eval().to(device)
 
-    savename = f'models/{model.__class__.__name__}_{args.model_id}'
-    info = torch.load(f'{savename}.ckpt')
-    model.load_state_dict(info['state_dict'])
-
-    with open(f'{savename}_args.txt', 'r') as f:
-        params = json.load(f)
-    pprint(params)
-
-    dataset_kwargs = dict(
-        use_fill_frac=args.use_fill_frac,
-        use_max_scaling=args.use_max_scaling,
-    )
-    
     with torch.autograd.set_detect_anomaly(True):
-        for county in params['val_county']:
-            dataset = CensusDataset(county, **dataset_kwargs)
+        for county in config['dataset']['val_counties']:
+            dataset = CensusDataset(county, **config['dataset']['kwargs'])
             dataset.validate()
-            compute_saliency(model, dataset, device, savename)
+            compute_saliency(model, dataset, device, save_dir)
 

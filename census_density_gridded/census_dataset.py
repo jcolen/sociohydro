@@ -111,7 +111,7 @@ class CensusDataset(torch.utils.data.Dataset):
             'x': self.x,
             'y': self.y,
             'mask': self.mask,
-            'housing': self.housing[None], #Size [1, H, W]
+            'housing': torch.FloatTensor(self.housing), #Size [H, W]
             'wb': torch.FloatTensor(self.wb(t)),
         }
 

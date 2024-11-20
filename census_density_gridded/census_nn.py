@@ -47,6 +47,7 @@ class CensusForecasting(nn.Module):
                  use_housing=False):
         super().__init__()
         
+        self.input_dim = input_dim
         self.output_dim = output_dim
         self.kernel_size = kernel_size
         self.N_hidden = N_hidden
@@ -54,9 +55,7 @@ class CensusForecasting(nn.Module):
         self.use_housing = use_housing
 
         if self.use_housing:
-            print('Using local housing capacity, adding an input dimension')
-            input_dim += 1
-        self.input_dim = input_dim
+            assert input_dim == output_dim + 1
     
         if hidden_size % input_dim != 0:
             self.read_in = nn.Sequential(
@@ -81,21 +80,6 @@ class CensusForecasting(nn.Module):
         # To be applied before nearest-neighbor interpolation on the mesh
         self.training_blur = transforms.GaussianBlur(kernel_size=self.kernel_size, sigma=(0.1, 3))
         self.inference_blur = transforms.GaussianBlur(kernel_size=self.kernel_size, sigma=1.) #1.5 for model_id=gridded
-    
-    def batch_step(self, batch, device):
-        wb = batch['wb'].to(device)
-        wb[wb.isnan()] = 0.
-        mask = batch['mask'] # Only use points in county for loss
-
-        kwargs = dict(
-            n_steps=wb.shape[0]-1,
-            dt=batch['dt'],
-            housing=batch['housing'].to(device) if self.use_housing else None,
-        )
-        wbNN = self.simulate(wb[0:1], **kwargs)[0]
-        #wbNN = self.simulate(wb[0:1], n_steps=wb.shape[0]-1, dt=batch['dt'])[0]
-        loss = F.l1_loss(wbNN[:,:,mask], wb[1:,:, mask])
-        return loss
 
     def forward(self, x, housing=None):
         '''
