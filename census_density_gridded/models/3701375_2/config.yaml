@@ -46,7 +46,7 @@ model:
     output_dim: 2
     use_housing: false
   class_path: census_nn.CensusForecasting
-  weights: models/3701375_2_all_counties/model_weight.ckpt
+  weights: models/3701375_2/model_weight.ckpt
 optimizer:
   args:
     lr: 0.0003

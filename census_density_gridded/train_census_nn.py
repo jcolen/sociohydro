@@ -11,6 +11,7 @@ from time import time
 
 from census_dataset import CensusDataset
 import census_nn
+import census_unet
 
 import logging
 logging.basicConfig(level=logging.INFO)
@@ -71,6 +72,7 @@ def run_training(model,
         train_loss = train_loss / len(train_dataset)
 
         val_loss = 0.
+        val_err = 0.
         model.eval()
 
         # Our evaluation metric is the forecasting error over the full county time series
@@ -86,20 +88,32 @@ def run_training(model,
                 mask = batch['mask'] # Only use points in county for loss
 
                 wbNN = model.simulate(wb[0:1], n_steps=wb.shape[0]-1, dt=batch['dt'], housing=housing)[0]
-                val_loss += (wbNN[-1,:,mask]-wb[-1,:,mask]).pow(2).sum(0).mean().item()
+
+                diff = wbNN[-1,:,mask] - wb[-1,:,mask]
+                housing = housing[0,:,mask]
+
+                val_loss += diff.pow(2).sum(0).mean().item()
+
+                if dataset.use_fill_frac:
+                    val_err += (diff * housing).pow(2).sum(0).mean().item()
+                elif dataset.use_max_scaling:
+                    val_err += (diff * housing.max()).pow(2).sum(0).mean().item()
+                else:
+                    val_err += diff.pow(2).sum(0).mean().item()
 
         scheduler.step()
-        logger.info(f'Epoch {epoch}\tTrain Loss = {train_loss:.3g}\tVal Loss = {val_loss:.3g}\t{time()-t:.3g} s')
+        logger.info(f'Epoch {epoch}\tTrain Loss = {train_loss:.3g}\tVal Loss = {val_loss:.3g}\tVal Err = {val_err:.3g}\t{time()-t:.3g} s')
 
         # Save if the model showed an improvement
-        if val_loss <= best_loss:
+        if val_err <= best_loss:
             save_dict = {
                 'state_dict': model.state_dict(),
                 'train_loss': train_loss,
-                'val_loss': val_loss
+                'val_loss': val_loss,
+                'val_err': val_err,
             }
             torch.save(save_dict, f'{save_dir}/model_weight.ckpt')
-            best_loss = val_loss
+            best_loss = val_err
             best_epoch = epoch
         
         # Early stopping if the model is no longer improving
@@ -136,7 +150,7 @@ def get_model(config):
         info = torch.load(config['weights'], map_location='cpu')
         model.load_state_dict(info['state_dict'])
 
-        logger.info(f'Model reached loss={info["val_loss"]:.3g}')
+        logger.info(f'Model reached error={info["val_err"]:.3g}')
     
     return model
 
