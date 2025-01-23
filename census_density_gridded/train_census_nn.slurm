@@ -4,7 +4,7 @@
 #SBATCH --output=/home/jcolen/scratch/%x_%A_%a.out
 #SBATCH --partition=gpu
 #SBATCH --gres=gpu:1
-#SBATCH --array=0-3
+#SBATCH --array=0-1
 #SBATCH --ntasks=2
 #SBATCH --mem=8G
 
