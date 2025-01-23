@@ -45,6 +45,10 @@ class CensusDataset(torch.utils.data.Dataset):
             return np.max(self.housing[self.mask])
 
     def smooth_with_fill(self, arr):
+        if self.sigma == 0:
+            # Don't smooth at all
+            return arr
+
         # before we can smooth, we need to interpolate (NN) to outside the county boundary
         msk = np.isnan(arr)
         mask = np.where(~msk)
