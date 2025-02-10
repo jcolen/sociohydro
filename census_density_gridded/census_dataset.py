@@ -45,6 +45,10 @@ class CensusDataset(torch.utils.data.Dataset):
             return np.max(self.housing[self.mask])
 
     def smooth_with_fill(self, arr):
+        if self.sigma == 0:
+            # Don't smooth at all
+            return arr
+
         # before we can smooth, we need to interpolate (NN) to outside the county boundary
         msk = np.isnan(arr)
         mask = np.where(~msk)
@@ -70,8 +74,11 @@ class CensusDataset(torch.utils.data.Dataset):
                 y_grid = g['y_grid'][:] / self.spatial_scale
                 mask = ~g['county_mask'][:].astype(bool)
 
-                w_grid.append(gaussian_filter(g['white_grid'][:], sigma=self.sigma))
-                b_grid.append(gaussian_filter(g['black_grid'][:], sigma=self.sigma))
+                w_grid.append(self.smooth_with_fill(g['white_grid'][:]))
+                b_grid.append(self.smooth_with_fill(g['black_grid'][:]))
+
+                #w_grid.append(gaussian_filter(g['white_grid'][:], sigma=self.sigma))
+                #b_grid.append(gaussian_filter(g['black_grid'][:], sigma=self.sigma))
 
         self.x = x_grid
         self.y = y_grid
