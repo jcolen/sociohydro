@@ -8,7 +8,7 @@ from glob import glob
 class SimulationDataset(torch.utils.data.Dataset):
 	def __init__(self,
 				path,
-				seq_len=10,
+				seq_len=5,
 				tmin=1,
 				tmax=-1):
 		self.train = True
@@ -58,6 +58,6 @@ class SimulationDataset(torch.utils.data.Dataset):
 			'y': self.y, 
 			'dt': self.dt,
 			't': t,
-			'ab': torch.FloatTensor(self.phi(t)),
+			'phi': torch.FloatTensor(self.phi(t)),
 		}
 		return sample
