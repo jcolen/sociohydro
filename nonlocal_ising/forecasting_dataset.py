@@ -1,5 +1,6 @@
 import torch
 from scipy.interpolate import interp1d
+from scipy.ndimage import gaussian_filter
 import numpy as np
 import h5py
 import json
@@ -9,11 +10,13 @@ class SimulationDataset(torch.utils.data.Dataset):
 	def __init__(self,
 				path,
 				seq_len=5,
+				sigma=0,
 				tmin=1,
 				tmax=-1):
 		self.train = True
 		self.path = path
 		self.seq_len = seq_len
+		self.sigma = sigma
 		self.tmin = tmin
 		self.tmax = tmax
 		self.init_data()
@@ -31,7 +34,10 @@ class SimulationDataset(torch.utils.data.Dataset):
 			for ii, key in enumerate(h5f.keys()):
 				if phi is None:
 					phi = np.zeros((len(h5f.keys()), 1, *h5f[key]['state'].shape))
-				phi[ii] = h5f[key]['state']
+				if self.sigma > 0:
+					phi[ii] = gaussian_filter(h5f[key]['state'].astype(float), sigma=self.sigma, mode='wrap')
+				else:
+					phi[ii] = h5f[key]['state']
 				t[ii] = h5f[key]['sweep'][()]
 		
 		# Grid parameters

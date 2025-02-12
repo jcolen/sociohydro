@@ -74,6 +74,7 @@ if __name__ == '__main__':
 	parser.add_argument('--n_epochs', type=int, default=200)
 	parser.add_argument('--batch_size', type=int, default=2)
 	parser.add_argument('--accumulate_grad_batches', type=int, default=8)
+	parser.add_argument('--sigma', type=int, default=0)
 	parser.add_argument('--savename', type=str, default='./models/SimulationForecasting')
 	args = parser.parse_args()
 
@@ -94,16 +95,16 @@ if __name__ == '__main__':
 	
 	train_datasets = []
 	for folder in args.train_folder:
-		train_datasets.append(SimulationDataset(folder))
+		train_datasets.append(SimulationDataset(folder, sigma=args.sigma))
 	train_dataset = torch.utils.data.ConcatDataset(train_datasets)
 		
 	val_datasets = []
 	for folder in args.val_folder:
-		val_datasets.append(SimulationDataset(folder))
+		val_datasets.append(SimulationDataset(folder, sigma=args.sigma))
 	val_dataset = torch.utils.data.ConcatDataset(val_datasets)
 		
 	device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
-	model = SimulationForecasting().to(device)
+	model = SimulationForecasting(smooth=args.sigma > 0).to(device)
 	
 	with torch.autograd.set_detect_anomaly(True): #Sometimes this just happens and I don't know why
 		train(model, train_dataset, val_dataset, 

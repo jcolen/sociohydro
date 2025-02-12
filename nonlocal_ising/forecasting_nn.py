@@ -44,7 +44,8 @@ class SimulationForecasting(nn.Module):
 				 kernel_size=7,
 				 N_hidden=8,
 				 hidden_size=64,
-				 dropout_rate=0.1):
+				 dropout_rate=0.1,
+				 smooth=False):
 		super().__init__()
 		
 		self.input_dim = input_dim
@@ -52,6 +53,7 @@ class SimulationForecasting(nn.Module):
 		self.kernel_size = kernel_size
 		self.N_hidden = N_hidden
 		self.hidden_size = hidden_size
+		self.smooth = smooth
 	
 		self.read_in = ConvNextBlock(input_dim, hidden_size, kernel_size, dropout_rate)
 
@@ -72,13 +74,15 @@ class SimulationForecasting(nn.Module):
 	def batch_step(self, sample):
 		phi1 = self.simulate(sample['phi'][:, 0], sample['phi'].shape[1]-1)
 
-		# Convert input and target to class probabilities
-		loss = F.binary_cross_entropy(
-			0.5 * (phi1 + 1),
-			0.5 * (sample['phi'][:, 1:] + 1),
-		)
+		if self.smooth:
+			loss = F.l1_loss(phi1, sample['phi'][:, 1:])
+		else:
+			# Convert input and target to class probabilities
+			loss = F.binary_cross_entropy(
+				0.5 * (phi1 + 1),
+				0.5 * (sample['phi'][:, 1:] + 1),
+			)
 
-		#loss = F.l1_loss(phi1, sample['phi'][:,1:])
 		return loss
 	
 	def forward(self, phi0):		
@@ -98,7 +102,6 @@ class SimulationForecasting(nn.Module):
 		preds = torch.zeros([b, steps, c, h, w], dtype=phi.dtype, device=phi.device)
 		for tt in range(steps):
 			phi = phi + self(phi)
-			# Nonlocal ising: Phi is either -1 or 1
 			phi = F.tanh(phi) # Bound from -1 to 1
 			preds[:, tt] += phi
 									

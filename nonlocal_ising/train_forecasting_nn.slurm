@@ -28,5 +28,6 @@ conda activate /project/vitelli/jonathan/sociohydro_env
 echo "STARTING" ${SLURM_ARRAY_TASK_ID}
 
 python train_forecasting_nn.py \
-    --n_epochs 200 \
-    --savename models/SimulationForecasting_${SLURM_ARRAY_TASK_ID}
+    --n_epochs 100 \
+	--sigma 10 \
+    --savename models/SimulationForecasting_sigma10_${SLURM_ARRAY_TASK_ID}
