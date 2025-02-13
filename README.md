@@ -4,24 +4,22 @@ This repository contains the code for training and analyzing machine learning mo
 
 ## Directory Organization
 ```
-├── census_density_gridded		: Final neural network census models
-	├── configs						: Training configuraiton files
-	├── models						: Trained models and saliency computations
-├── nonlinear_simulations		: Neural networks trained on nonlinear utility sims
-	├── Figures						: Saved figures
-	├── models						: Trained models and saliency computations
-├── nonlocal_ising				: Neural networks trained on non-local Ising model sims
-	├── Figures						: Saved figures
-	├── models						: Trained models and saliency computations
+├── census_density_gridded	: Final neural network census models
+	├── configs			: Training configuraiton files
+	├── models			: Trained models and saliency computations
+├── nonlinear_simulations	: Neural networks trained on nonlinear utility sims
+	├── Figures			: Saved figures
+	├── models			: Trained models and saliency computations
+├── nonlocal_ising		: Neural networks trained on non-local Ising model sims
+	├── Figures			: Saved figures
+	├── models			: Trained models and saliency computations
 ├── sociohydro_environment.yml	: conda environment YAML file
 
 ------ LEGACY CODE ------
-├── linear_simulations			: Neural networks trained on linear utility sims
-	├── Figures						: Saved figures
-	├── models						: Trained models and saliency computations
-├── census_density				: Legacy neural network code
-├── decennial					: Legacy neural network code
-├── param_inference				: Legacy parameter estimation code
+├── linear_simulations		: Neural networks trained on linear utility sims
+├── census_density		: Legacy neural network code
+├── decennial			: Legacy neural network code
+├── param_inference		: Legacy parameter estimation code
 
 ```
 
