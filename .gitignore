@@ -7,3 +7,5 @@ validation
 *.pyc
 __pycache__
 pipeline_*
+jupyter-server.sbatch
+session_logs
